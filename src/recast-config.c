@@ -16,7 +16,7 @@
 
 char *recast_config_get_path(void)
 {
-	char *profile_dir = obs_frontend_get_current_profile_path(NULL);
+	char *profile_dir = obs_frontend_get_current_profile_path();
 	if (!profile_dir)
 		return NULL;
 

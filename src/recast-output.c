@@ -90,7 +90,7 @@ static bool setup_custom_view(recast_output_target_t *t)
 		blog(LOG_ERROR,
 		     "[Recast] Failed to create video encoder for '%s'",
 		     t->name);
-		obs_view_remove(t->view, t->video);
+		obs_view_remove(t->view);
 		obs_view_destroy(t->view);
 		t->view = NULL;
 		t->video = NULL;
@@ -114,7 +114,7 @@ static void teardown_custom_view(recast_output_target_t *t)
 	t->audio_encoder = NULL; /* not owned by us */
 
 	if (t->view && t->video) {
-		obs_view_remove(t->view, t->video);
+		obs_view_remove(t->view);
 		t->video = NULL;
 	}
 	if (t->view) {

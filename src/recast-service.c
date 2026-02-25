@@ -66,14 +66,10 @@ static obs_properties_t *recast_service_properties(void *priv)
 	return props;
 }
 
-static obs_data_t *recast_service_defaults(void *unused)
+static void recast_service_defaults(obs_data_t *settings)
 {
-	UNUSED_PARAMETER(unused);
-
-	obs_data_t *defaults = obs_data_create();
-	obs_data_set_default_string(defaults, "url", "");
-	obs_data_set_default_string(defaults, "key", "");
-	return defaults;
+	obs_data_set_default_string(settings, "url", "");
+	obs_data_set_default_string(settings, "key", "");
 }
 
 static const char *recast_service_get_url(void *priv)
@@ -97,7 +93,7 @@ static struct obs_service_info recast_service_info = {
 	.destroy = recast_service_destroy,
 	.update = recast_service_update,
 	.get_properties = recast_service_properties,
-	.get_defaults2 = recast_service_defaults,
+	.get_defaults = recast_service_defaults,
 	.get_url = recast_service_get_url,
 	.get_key = recast_service_get_key,
 };

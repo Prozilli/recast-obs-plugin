@@ -528,13 +528,9 @@ void recast_dock_create(void)
 	dock_instance = new RecastDock(
 		static_cast<QWidget *>(obs_frontend_get_main_window()));
 
-#if OBS_VERSION_MAJOR >= 30
 	obs_frontend_add_dock_by_id("RecastOutputDock",
 				    obs_module_text("Recast.DockTitle"),
 				    dock_instance);
-#else
-	obs_frontend_add_dock(dock_instance);
-#endif
 }
 
 void recast_dock_destroy(void)

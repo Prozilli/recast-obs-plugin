@@ -5,12 +5,33 @@ project(recast-obs-plugin VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- Find OBS SDK ---
-find_package(libobs REQUIRED)
-find_package(obs-frontend-api REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+# --- OBS SDK ---
+# OBS_SDK_DIR should point to the extracted OBS source (for headers).
+# OBS_LIB_DIR should point to the directory containing obs.lib and
+# obs-frontend-api.lib (generated from installed OBS DLLs).
+if(NOT OBS_SDK_DIR)
+	set(OBS_SDK_DIR "$ENV{OBS_SDK_DIR}" CACHE PATH "Path to OBS source tree")
+endif()
+if(NOT OBS_LIB_DIR)
+	set(OBS_LIB_DIR "$ENV{OBS_LIB_DIR}" CACHE PATH "Path to obs.lib / obs-frontend-api.lib")
+endif()
 
+# --- Find Qt6 ---
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 qt6_standard_project_setup()
+
+# --- Create imported targets for OBS ---
+add_library(OBS::libobs STATIC IMPORTED)
+set_target_properties(OBS::libobs PROPERTIES
+	IMPORTED_LOCATION "${OBS_LIB_DIR}/obs.lib"
+	INTERFACE_INCLUDE_DIRECTORIES "${OBS_SDK_DIR}/libobs"
+)
+
+add_library(OBS::obs-frontend-api STATIC IMPORTED)
+set_target_properties(OBS::obs-frontend-api PROPERTIES
+	IMPORTED_LOCATION "${OBS_LIB_DIR}/obs-frontend-api.lib"
+	INTERFACE_INCLUDE_DIRECTORIES "${OBS_SDK_DIR}/frontend/api"
+)
 
 # --- Plugin target ---
 add_library(recast-obs-plugin MODULE
@@ -54,21 +75,16 @@ else()
 endif()
 
 # --- Install ---
-if(COMMAND install_obs_plugin_with_data)
-	install_obs_plugin_with_data(recast-obs-plugin data)
+if(WIN32)
+	set(_plugin_dest "obs-plugins/64bit")
+	set(_data_dest "data/obs-plugins/recast-obs-plugin")
+elseif(APPLE)
+	set(_plugin_dest "obs-plugins")
+	set(_data_dest "data/obs-plugins/recast-obs-plugin")
 else()
-	# Fallback install rules
-	if(WIN32)
-		set(_plugin_dest "obs-plugins/64bit")
-		set(_data_dest "data/obs-plugins/recast-obs-plugin")
-	elseif(APPLE)
-		set(_plugin_dest "obs-plugins")
-		set(_data_dest "data/obs-plugins/recast-obs-plugin")
-	else()
-		set(_plugin_dest "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
-		set(_data_dest "${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/recast-obs-plugin")
-	endif()
-
-	install(TARGETS recast-obs-plugin DESTINATION "${_plugin_dest}")
-	install(DIRECTORY data/ DESTINATION "${_data_dest}")
+	set(_plugin_dest "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
+	set(_data_dest "${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/recast-obs-plugin")
 endif()
+
+install(TARGETS recast-obs-plugin DESTINATION "${_plugin_dest}")
+install(DIRECTORY data/ DESTINATION "${_data_dest}")

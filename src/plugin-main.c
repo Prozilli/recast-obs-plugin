@@ -10,7 +10,10 @@
 
 #include "recast-output.h"
 #include "recast-service.h"
-#include "recast-dock.h"
+
+/* C-only forward declarations for the dock (C++ implementation) */
+void recast_dock_create(void);
+void recast_dock_destroy(void);
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("recast-obs-plugin", "en-US")
