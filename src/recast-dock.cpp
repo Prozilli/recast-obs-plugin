@@ -187,6 +187,10 @@ RecastPreviewWidget::~RecastPreviewWidget()
 		obs_display_destroy(display);
 		display = nullptr;
 	}
+	if (selected_item) {
+		obs_sceneitem_release(selected_item);
+		selected_item = nullptr;
+	}
 	if (scene_source) {
 		obs_source_release(scene_source);
 		scene_source = nullptr;
@@ -243,27 +247,40 @@ void RecastPreviewWidget::ClearScene()
 	}
 	canvas_width = 0;
 	canvas_height = 0;
-	selected_item = nullptr;
+	if (selected_item) {
+		obs_sceneitem_release(selected_item);
+		selected_item = nullptr;
+	}
 	interactive_scene = nullptr;
 }
 
 void RecastPreviewWidget::SetInteractiveScene(obs_scene_t *scene)
 {
 	interactive_scene = scene;
-	selected_item = nullptr;
+	if (selected_item) {
+		obs_sceneitem_release(selected_item);
+		selected_item = nullptr;
+	}
 	dragging = false;
 }
 
 void RecastPreviewWidget::ClearInteractiveScene()
 {
 	interactive_scene = nullptr;
-	selected_item = nullptr;
+	if (selected_item) {
+		obs_sceneitem_release(selected_item);
+		selected_item = nullptr;
+	}
 	dragging = false;
 }
 
 void RecastPreviewWidget::SetSelectedItem(obs_sceneitem_t *item)
 {
+	if (selected_item)
+		obs_sceneitem_release(selected_item);
 	selected_item = item;
+	if (selected_item)
+		obs_sceneitem_addref(selected_item);
 }
 
 /* ---- Coordinate conversion ---- */
@@ -297,6 +314,10 @@ void RecastPreviewWidget::GetItemRect(obs_sceneitem_t *item,
 				      float &rw, float &rh)
 {
 	obs_source_t *src = obs_sceneitem_get_source(item);
+	if (!src) {
+		rx = ry = rw = rh = 0;
+		return;
+	}
 	float cx = (float)obs_source_get_width(src);
 	float cy = (float)obs_source_get_height(src);
 
@@ -333,6 +354,8 @@ static bool hit_test_cb(obs_scene_t *, obs_sceneitem_t *item, void *param)
 		return true;
 
 	obs_source_t *src = obs_sceneitem_get_source(item);
+	if (!src)
+		return true;
 	float cx = (float)obs_source_get_width(src);
 	float cy = (float)obs_source_get_height(src);
 	if (cx <= 0 || cy <= 0)
@@ -451,6 +474,7 @@ void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 		item_start_scale_y = sc.y;
 
 		obs_source_t *src = obs_sceneitem_get_source(selected_item);
+		if (!src) return;
 		struct obs_sceneitem_crop crop;
 		obs_sceneitem_get_crop(selected_item, &crop);
 		item_start_width = ((float)obs_source_get_width(src) -
@@ -464,7 +488,11 @@ void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 
 	/* Hit test scene items */
 	obs_sceneitem_t *hit = HitTestItems(sx, sy);
+	if (selected_item)
+		obs_sceneitem_release(selected_item);
 	selected_item = hit;
+	if (selected_item)
+		obs_sceneitem_addref(selected_item);
 	emit itemSelected(selected_item);
 
 	if (hit) {
@@ -481,6 +509,7 @@ void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 		item_start_scale_y = sc.y;
 
 		obs_source_t *src = obs_sceneitem_get_source(hit);
+		if (!src) return;
 		struct obs_sceneitem_crop crop;
 		obs_sceneitem_get_crop(hit, &crop);
 		item_start_width = ((float)obs_source_get_width(src) -
@@ -614,8 +643,15 @@ void RecastPreviewWidget::DrawSelectionOverlay(RecastPreviewWidget *widget)
 	if (!item)
 		return;
 
+	/* Validate the sceneitem's source is still alive */
+	obs_source_t *item_src = obs_sceneitem_get_source(item);
+	if (!item_src)
+		return;
+
 	float rx, ry, rw, rh;
 	widget->GetItemRect(item, rx, ry, rw, rh);
+	if (rw <= 0 || rh <= 0)
+		return;
 
 	gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
 	gs_eparam_t *color_param =
@@ -714,6 +750,13 @@ void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
 	    widget->canvas_height <= 0)
 		return;
 
+	/* Take a safe reference to the source for rendering.
+	 * This prevents a crash if the source is freed on the UI thread
+	 * while we are rendering on the graphics thread. */
+	obs_source_t *src = obs_source_get_ref(widget->scene_source);
+	if (!src)
+		return;
+
 	int x, y;
 	float scale;
 	GetScaleAndCenterPos(widget->canvas_width, widget->canvas_height,
@@ -728,7 +771,7 @@ void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
 	gs_ortho(0.0f, float(widget->canvas_width), 0.0f,
 		 float(widget->canvas_height), -100.0f, 100.0f);
 
-	obs_source_video_render(widget->scene_source);
+	obs_source_video_render(src);
 
 	/* Draw selection overlay if interactive */
 	if (widget->interactive_scene && widget->selected_item)
@@ -736,6 +779,8 @@ void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
 
 	gs_projection_pop();
 	gs_viewport_pop();
+
+	obs_source_release(src);
 }
 
 /* ====================================================================
