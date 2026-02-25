@@ -509,7 +509,7 @@ void SourceTree::keyPressEvent(QKeyEvent *event)
 			auto *widget = static_cast<SourceTreeItem *>(
 				indexWidget(index));
 			if (widget) {
-				widget->mouseDoubleClickEvent(nullptr);
+				widget->startRename();
 			}
 		}
 		return;

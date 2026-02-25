@@ -603,10 +603,18 @@ bool recast_output_target_start_recording(recast_output_target_t *t)
 	if (t->rec_format && *t->rec_format)
 		ext = t->rec_format;
 
-	time_t now = time(NULL);
-	struct tm *tm_info = localtime(&now);
 	char time_buf[64];
-	strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%M-%S", tm_info);
+	{
+		time_t now = time(NULL);
+		struct tm tm_storage;
+#ifdef _MSC_VER
+		_localtime64_s(&tm_storage, &now);
+#else
+		localtime_r(&now, &tm_storage);
+#endif
+		strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%M-%S",
+			 &tm_storage);
+	}
 
 	dstr_printf(&filename, "%s/%s_%s.%s",
 		    t->rec_path, t->name, time_buf, ext);

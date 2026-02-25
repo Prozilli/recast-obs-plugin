@@ -27,6 +27,7 @@ public:
 	obs_sceneitem_t *sceneItem() const { return item_; }
 	void setSelected(bool selected);
 	void update();
+	void startRename();
 
 signals:
 	void visibilityToggled(obs_sceneitem_t *item, bool visible);
@@ -52,7 +53,6 @@ private:
 	bool renaming_ = false;
 
 	QIcon getSourceTypeIcon(obs_source_t *source);
-	void startRename();
 	void cancelRename();
 };
 
