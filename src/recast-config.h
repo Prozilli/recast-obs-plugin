@@ -1,7 +1,6 @@
 #pragma once
 
 #include <obs-module.h>
-#include "recast-output.h"
 #include "recast-scene-model.h"
 
 #ifdef __cplusplus
@@ -11,32 +10,24 @@ extern "C" {
 /*
  * Config file: <OBS profile dir>/recast-outputs.json
  *
- * Format:
+ * New format (v3):
  * {
- *   "outputs": [
- *     {
- *       "name": "Twitch",
- *       "url": "rtmp://live.twitch.tv/app",
- *       "key": "live_xxx",
- *       "scene": "Main Gaming",
- *       "enabled": true,
- *       "autoStart": false,
- *       "width": 0,
- *       "height": 0
- *     }
+ *   "vertical": {
+ *     "canvas_width": 1080,
+ *     "canvas_height": 1920,
+ *     "scenes": [...],
+ *     "active_scene": "Scene 1"
+ *   },
+ *   "destinations": [
+ *     { "id": "...", "name": "Twitch", "url": "rtmp://...", "key": "...",
+ *       "canvas": "main", "autoStart": true, "autoStop": true }
  *   ],
  *   "server_token": ""
  * }
+ *
+ * Old format (v2) is detected by presence of "outputs" key with
+ * "usePrivateScenes" and automatically migrated.
  */
-
-/* Load all output target configs from JSON. Returns an obs_data_array_t* that
- * the caller must release with obs_data_array_release().  Returns NULL on
- * error or if the config file does not exist yet. */
-obs_data_array_t *recast_config_load(void);
-
-/* Save an array of output target configs to JSON. Each element must have:
- *   name, url, key, scene, enabled, autoStart, width, height */
-bool recast_config_save(obs_data_array_t *targets);
 
 /* Load the stored Recast server auth token (empty string if unset). Caller
  * must bfree() the returned string. */

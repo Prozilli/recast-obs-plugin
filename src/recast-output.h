@@ -1,110 +1,13 @@
 #pragma once
 
 #include <obs-module.h>
-#include "recast-scene-model.h"
 #include "recast-protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define RECAST_MAX_OUTPUTS 16
-
-/* ---- Per-target state ---- */
-
-typedef struct recast_output_target {
-	/* Identity */
-	char *id; /* unique, e.g. "recast_out_1709..." */
-
-	/* Config */
-	char *name;
-	char *url;
-	char *key;
-	char *scene_name; /* NULL = use main scene (legacy) */
-	bool enabled;
-	bool auto_start;
-	bool auto_stop;   /* stop when main stream stops */
-	int width;  /* 0 = use main canvas */
-	int height; /* 0 = use main canvas */
-
-	/* Protocol detection */
-	recast_protocol_t protocol;
-
-	/* Encoding mode */
-	bool advanced_encoder;        /* false=shared, true=custom */
-	char *encoder_id;             /* e.g. "obs_x264", NULL=default */
-	obs_data_t *encoder_settings; /* custom encoder settings */
-	int audio_track;              /* 0-5 for tracks 1-6 */
-	int custom_bitrate;           /* 0 = use shared/default */
-
-	/* Independent scene model (NULL when use_private_scenes=false) */
-	recast_scene_model_t *scene_model;
-	bool use_private_scenes;
-
-	/* OBS objects */
-	obs_output_t *output;   /* streaming output instance */
-	obs_service_t *service; /* rtmp_custom / whip_custom instance */
-
-	/* Per-scene rendering — NULL when sharing main */
-	obs_view_t *view;
-	video_t *video;
-	obs_encoder_t *video_encoder;
-	obs_encoder_t *audio_encoder;
-
-	/* Recording */
-	obs_output_t *rec_output;
-	obs_encoder_t *rec_video_encoder;
-	bool rec_active;
-	bool rec_enabled;
-	char *rec_path;
-	char *rec_format;  /* mp4, mkv, flv */
-	int rec_bitrate;
-
-	/* Virtual camera */
-	obs_output_t *virtualcam_output;
-	bool virtualcam_active;
-
-	/* Runtime state */
-	bool active;
-	uint64_t start_time_ns;
-} recast_output_target_t;
-
-/* ---- Management API ---- */
-
-recast_output_target_t *recast_output_target_create(const char *name,
-						    const char *url,
-						    const char *key,
-						    const char *scene_name,
-						    int width, int height);
-
-void recast_output_target_destroy(recast_output_target_t *target);
-
-bool recast_output_target_start(recast_output_target_t *target);
-void recast_output_target_stop(recast_output_target_t *target);
-
-/* Returns elapsed streaming time in seconds, 0 if not active */
-uint64_t recast_output_target_elapsed_sec(const recast_output_target_t *t);
-
-/* Bind the active scene from scene_model to the view.
- * Updates obs_view_set_source when user switches scenes. */
-void recast_output_target_bind_active_scene(recast_output_target_t *target);
-
-/* Create the view/video pipeline for preview (without encoders).
- * Call this to enable preview before streaming starts.
- * Pass scene_src = the source to render in the view. */
-bool recast_output_target_ensure_view(recast_output_target_t *target,
-				      obs_source_t *scene_src);
-
-/* Recording */
-bool recast_output_target_start_recording(recast_output_target_t *target);
-void recast_output_target_stop_recording(recast_output_target_t *target);
-
-/* Virtual camera */
-bool recast_output_target_start_virtualcam(recast_output_target_t *target);
-void recast_output_target_stop_virtualcam(recast_output_target_t *target);
-
 /* ---- OBS registration (called from plugin-main.c) ---- */
-
 void recast_output_register(void);
 
 #ifdef __cplusplus

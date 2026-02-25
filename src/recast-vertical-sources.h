@@ -5,31 +5,30 @@
 
 extern "C" {
 #include <obs.h>
-#include "recast-output.h"
 }
 
 class SourceTree;
 
-class RecastSourcesDock : public QDockWidget {
+/*
+ * RecastVerticalSourcesDock -- Always-present sources dock for vertical canvas.
+ *
+ * Wraps existing SourceTree with bottom toolbar [+] [-] [^] [v].
+ * Matches native OBS Sources panel look.
+ */
+
+class RecastVerticalSourcesDock : public QDockWidget {
 	Q_OBJECT
 
 public:
-	explicit RecastSourcesDock(recast_output_target_t *target,
-				    QWidget *parent = nullptr);
-	~RecastSourcesDock();
+	explicit RecastVerticalSourcesDock(QWidget *parent = nullptr);
+	~RecastVerticalSourcesDock();
 
 public slots:
-	/* Called when the scenes dock selects a new scene */
-	void setCurrentScene(obs_scene_t *scene, obs_source_t *source);
-
-	/* Called when the preview selects an item by clicking */
+	void setCurrentScene(int idx);
 	void selectSceneItem(obs_sceneitem_t *item);
 
 signals:
-	/* Emitted when sources are added/removed/reordered */
 	void sourcesModified();
-
-	/* Emitted when user selects an item in the list */
 	void itemSelected(obs_sceneitem_t *item);
 
 private slots:
@@ -40,8 +39,7 @@ private slots:
 	void onContextMenu(const QPoint &pos);
 
 private:
-	recast_output_target_t *target_;
-	obs_scene_t *current_scene_;
+	obs_scene_t *current_scene_ = nullptr;
 	SourceTree *tree_;
 	QPushButton *add_btn_;
 	QPushButton *remove_btn_;

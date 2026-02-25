@@ -1,7 +1,8 @@
 /*
- * recast-config.c — JSON config persistence for Recast output targets.
+ * recast-config.c -- JSON config persistence for Recast.
  *
  * Reads/writes <OBS profile dir>/recast-outputs.json.
+ * Provides scene model serialization used by RecastVertical.
  */
 
 #include "recast-config.h"
@@ -39,48 +40,7 @@ static obs_data_t *load_root(void)
 	return root;
 }
 
-static bool save_root(obs_data_t *root)
-{
-	char *path = recast_config_get_path();
-	if (!path)
-		return false;
-
-	bool ok = obs_data_save_json(root, path);
-	if (ok) {
-		blog(LOG_INFO, "[Recast] Config saved to %s", path);
-	} else {
-		blog(LOG_ERROR, "[Recast] Failed to save config to %s", path);
-	}
-
-	bfree(path);
-	return ok;
-}
-
-/* ---- Public API ---- */
-
-obs_data_array_t *recast_config_load(void)
-{
-	obs_data_t *root = load_root();
-	if (!root)
-		return NULL;
-
-	obs_data_array_t *arr = obs_data_get_array(root, "outputs");
-	obs_data_release(root);
-	return arr; /* caller must obs_data_array_release() */
-}
-
-bool recast_config_save(obs_data_array_t *targets)
-{
-	obs_data_t *root = load_root();
-	if (!root)
-		root = obs_data_create();
-
-	obs_data_set_array(root, "outputs", targets);
-
-	bool ok = save_root(root);
-	obs_data_release(root);
-	return ok;
-}
+/* ---- Server token ---- */
 
 char *recast_config_get_server_token(void)
 {
@@ -102,7 +62,14 @@ bool recast_config_set_server_token(const char *token)
 
 	obs_data_set_string(root, "server_token", token ? token : "");
 
-	bool ok = save_root(root);
+	char *path = recast_config_get_path();
+	if (!path) {
+		obs_data_release(root);
+		return false;
+	}
+
+	bool ok = obs_data_save_json(root, path);
+	bfree(path);
 	obs_data_release(root);
 	return ok;
 }
@@ -121,9 +88,6 @@ static obs_data_t *save_scene_item(obs_sceneitem_t *item)
 		obs_data_set_string(d, "source_name",
 				    obs_source_get_name(src));
 
-		/* Check if this is a "known" main OBS source (existing) or
-		 * one we created privately. Private sources have no public
-		 * name registration, so we save their type + settings. */
 		obs_source_t *lookup =
 			obs_get_source_by_name(obs_source_get_name(src));
 		if (lookup) {

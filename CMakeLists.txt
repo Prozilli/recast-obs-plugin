@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(recast-obs-plugin VERSION 1.0.0 LANGUAGES C CXX)
+project(recast-obs-plugin VERSION 3.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,20 +35,33 @@ set_target_properties(OBS::obs-frontend-api PROPERTIES
 
 # --- Plugin target ---
 add_library(recast-obs-plugin MODULE
+	# Core C files
 	src/plugin-main.c
 	src/recast-output.c
 	src/recast-protocol.c
 	src/recast-config.c
 	src/recast-scene-model.c
+
+	# Shared C++ widgets (kept from v2)
 	src/recast-platform-icons.cpp
 	src/recast-source-tree.cpp
-	src/recast-config-dialog.cpp
-	src/recast-dock.cpp
-	src/recast-dock-manager.cpp
-	src/recast-scenes-dock.cpp
-	src/recast-sources-dock.cpp
-	src/recast-preview-dock.cpp
-	src/recast-settings-dock.cpp
+
+	# New: extracted preview widget
+	src/recast-preview-widget.cpp
+
+	# New: vertical canvas singleton
+	src/recast-vertical.cpp
+
+	# New: always-present vertical docks
+	src/recast-vertical-preview.cpp
+	src/recast-vertical-scenes.cpp
+	src/recast-vertical-sources.cpp
+
+	# New: multistream dock
+	src/recast-multistream.cpp
+
+	# New: top-level UI setup
+	src/recast-ui.cpp
 )
 
 target_include_directories(recast-obs-plugin PRIVATE src)

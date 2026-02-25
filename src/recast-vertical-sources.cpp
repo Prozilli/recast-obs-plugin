@@ -1,13 +1,14 @@
 /*
- * recast-sources-dock.cpp -- Per-output sources dock widget.
+ * recast-vertical-sources.cpp -- Always-present vertical sources dock.
  *
  * Uses the custom SourceTree widget for rich source display with
  * type icons, visibility eye, lock toggle, inline rename, and
  * drag-and-drop reordering.
  */
 
-#include "recast-sources-dock.h"
+#include "recast-vertical-sources.h"
 #include "recast-source-tree.h"
+#include "recast-vertical.h"
 
 #include <QAction>
 #include <QDialog>
@@ -31,17 +32,10 @@ extern "C" {
 
 /* ---- Constructor / Destructor ---- */
 
-RecastSourcesDock::RecastSourcesDock(recast_output_target_t *target,
-				     QWidget *parent)
-	: QDockWidget(parent), target_(target), current_scene_(nullptr)
+RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
+	: QDockWidget(obs_module_text("Recast.Vertical.Sources"), parent)
 {
-	QString title = QString("%1: %2")
-				.arg(obs_module_text("Recast.Dock.Sources"))
-				.arg(QString::fromUtf8(target->name));
-	setWindowTitle(title);
-	setObjectName(QString("RecastSources_%1").arg(
-		QString::fromUtf8(target->id)));
-
+	setObjectName("RecastVerticalSourcesDock");
 	setFeatures(QDockWidget::DockWidgetMovable |
 		    QDockWidget::DockWidgetFloatable |
 		    QDockWidget::DockWidgetClosable);
@@ -54,76 +48,86 @@ RecastSourcesDock::RecastSourcesDock(recast_output_target_t *target,
 	tree_ = new SourceTree;
 	tree_->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(tree_, &SourceTree::itemSelected,
-		this, &RecastSourcesDock::itemSelected);
+		this, &RecastVerticalSourcesDock::itemSelected);
 	connect(tree_, &SourceTree::sourcesModified,
-		this, &RecastSourcesDock::sourcesModified);
+		this, &RecastVerticalSourcesDock::sourcesModified);
 	connect(tree_, &QWidget::customContextMenuRequested,
-		this, &RecastSourcesDock::onContextMenu);
+		this, &RecastVerticalSourcesDock::onContextMenu);
 	layout->addWidget(tree_);
 
 	/* Toolbar */
 	auto *toolbar = new QHBoxLayout;
 
-	add_btn_ = new QPushButton(obs_module_text("Recast.Sources.Add"));
+	add_btn_ = new QPushButton("+");
+	add_btn_->setFixedWidth(28);
+	add_btn_->setToolTip(obs_module_text("Recast.Sources.Add"));
 	connect(add_btn_, &QPushButton::clicked,
-		this, &RecastSourcesDock::onAddSource);
+		this, &RecastVerticalSourcesDock::onAddSource);
 	toolbar->addWidget(add_btn_);
 
-	remove_btn_ =
-		new QPushButton(obs_module_text("Recast.Sources.Remove"));
+	remove_btn_ = new QPushButton("-");
+	remove_btn_->setFixedWidth(28);
+	remove_btn_->setToolTip(obs_module_text("Recast.Sources.Remove"));
 	connect(remove_btn_, &QPushButton::clicked,
-		this, &RecastSourcesDock::onRemoveSource);
+		this, &RecastVerticalSourcesDock::onRemoveSource);
 	toolbar->addWidget(remove_btn_);
 
 	up_btn_ = new QPushButton(obs_module_text("Recast.Sources.Up"));
 	up_btn_->setFixedWidth(30);
 	connect(up_btn_, &QPushButton::clicked,
-		this, &RecastSourcesDock::onMoveUp);
+		this, &RecastVerticalSourcesDock::onMoveUp);
 	toolbar->addWidget(up_btn_);
 
 	down_btn_ = new QPushButton(obs_module_text("Recast.Sources.Down"));
 	down_btn_->setFixedWidth(30);
 	connect(down_btn_, &QPushButton::clicked,
-		this, &RecastSourcesDock::onMoveDown);
+		this, &RecastVerticalSourcesDock::onMoveDown);
 	toolbar->addWidget(down_btn_);
+
+	toolbar->addStretch();
 
 	layout->addLayout(toolbar);
 
 	setWidget(container);
 
 	/* Show initial scene if available */
-	if (target->use_private_scenes && target->scene_model) {
-		current_scene_ = recast_scene_model_get_active_scene(
-			target->scene_model);
+	RecastVertical *v = RecastVertical::instance();
+	recast_scene_model_t *model = v->sceneModel();
+	if (model) {
+		current_scene_ = recast_scene_model_get_active_scene(model);
 		tree_->setScene(current_scene_);
 	}
 }
 
-RecastSourcesDock::~RecastSourcesDock() {}
+RecastVerticalSourcesDock::~RecastVerticalSourcesDock() {}
 
 /* ---- Public Slots ---- */
 
-void RecastSourcesDock::setCurrentScene(obs_scene_t *scene,
-					obs_source_t *source)
+void RecastVerticalSourcesDock::setCurrentScene(int idx)
 {
-	Q_UNUSED(source);
-	current_scene_ = scene;
+	Q_UNUSED(idx);
+	RecastVertical *v = RecastVertical::instance();
+	recast_scene_model_t *model = v->sceneModel();
+
+	current_scene_ = model
+		? recast_scene_model_get_active_scene(model)
+		: nullptr;
 	tree_->setScene(current_scene_);
 }
 
-void RecastSourcesDock::selectSceneItem(obs_sceneitem_t *item)
+void RecastVerticalSourcesDock::selectSceneItem(obs_sceneitem_t *item)
 {
 	tree_->selectItem(item);
 }
 
-/* ---- Build full add-source menu (matching stock OBS) ---- */
+/* ---- Build full add-source menu ---- */
 
 struct source_type_entry {
 	QString id;
 	QString display_name;
 };
 
-void RecastSourcesDock::buildAddSourceMenu(QMenu *menu)
+void RecastVerticalSourcesDock::buildAddSourceMenu(QMenu *menu)
 {
 	/* Section: Add Existing Source */
 	QMenu *existing_menu =
@@ -202,7 +206,7 @@ void RecastSourcesDock::buildAddSourceMenu(QMenu *menu)
 
 /* ---- Slots ---- */
 
-void RecastSourcesDock::onAddSource()
+void RecastVerticalSourcesDock::onAddSource()
 {
 	if (!current_scene_)
 		return;
@@ -212,7 +216,7 @@ void RecastSourcesDock::onAddSource()
 	menu.exec(QCursor::pos());
 }
 
-void RecastSourcesDock::onContextMenu(const QPoint &pos)
+void RecastVerticalSourcesDock::onContextMenu(const QPoint &pos)
 {
 	QMenu menu;
 
@@ -240,9 +244,8 @@ void RecastSourcesDock::onContextMenu(const QPoint &pos)
 		/* Transform */
 		QAction *transform_action = menu.addAction(
 			obs_module_text("Recast.Sources.Transform"));
-		connect(transform_action, &QAction::triggered, this, [this, si]() {
-			showTransformDialog(si);
-		});
+		connect(transform_action, &QAction::triggered, this,
+			[this, si]() { showTransformDialog(si); });
 
 		menu.addSeparator();
 
@@ -251,11 +254,12 @@ void RecastSourcesDock::onContextMenu(const QPoint &pos)
 		QAction *vis_action = menu.addAction(
 			visible ? obs_module_text("Recast.Sources.Hide")
 				: obs_module_text("Recast.Sources.Show"));
-		connect(vis_action, &QAction::triggered, this, [this, si, visible]() {
-			obs_sceneitem_set_visible(si, !visible);
-			tree_->refreshItems();
-			emit sourcesModified();
-		});
+		connect(vis_action, &QAction::triggered, this,
+			[this, si, visible]() {
+				obs_sceneitem_set_visible(si, !visible);
+				tree_->refreshItems();
+				emit sourcesModified();
+			});
 
 		menu.addSeparator();
 
@@ -285,34 +289,42 @@ void RecastSourcesDock::onContextMenu(const QPoint &pos)
 
 		QAction *move_bottom = order_menu->addAction(
 			obs_module_text("Recast.Sources.MoveBottom"));
-		connect(move_bottom, &QAction::triggered, this, [this, si]() {
-			obs_sceneitem_set_order(si, OBS_ORDER_MOVE_BOTTOM);
-			tree_->refreshItems();
-			emit sourcesModified();
-		});
+		connect(move_bottom, &QAction::triggered, this,
+			[this, si]() {
+				obs_sceneitem_set_order(
+					si, OBS_ORDER_MOVE_BOTTOM);
+				tree_->refreshItems();
+				emit sourcesModified();
+			});
 
 		menu.addSeparator();
 
 		/* Rename */
 		QAction *rename_action = menu.addAction(
 			obs_module_text("Recast.Sources.RenameSource"));
-		connect(rename_action, &QAction::triggered, this, [this, src]() {
-			bool ok;
-			QString new_name = QInputDialog::getText(
-				this,
-				obs_module_text("Recast.Sources.RenameSource"),
-				obs_module_text("Recast.Sources.EnterName"),
-				QLineEdit::Normal,
-				QString::fromUtf8(obs_source_get_name(src)),
-				&ok);
-			if (ok && !new_name.trimmed().isEmpty()) {
-				obs_source_set_name(
-					src,
-					new_name.trimmed().toUtf8().constData());
-				tree_->refreshItems();
-				emit sourcesModified();
-			}
-		});
+		connect(rename_action, &QAction::triggered, this,
+			[this, src]() {
+				bool ok;
+				QString new_name = QInputDialog::getText(
+					this,
+					obs_module_text(
+						"Recast.Sources.RenameSource"),
+					obs_module_text(
+						"Recast.Sources.EnterName"),
+					QLineEdit::Normal,
+					QString::fromUtf8(
+						obs_source_get_name(src)),
+					&ok);
+				if (ok && !new_name.trimmed().isEmpty()) {
+					obs_source_set_name(
+						src,
+						new_name.trimmed()
+							.toUtf8()
+							.constData());
+					tree_->refreshItems();
+					emit sourcesModified();
+				}
+			});
 
 		/* Remove */
 		QAction *remove_action = menu.addAction(
@@ -332,8 +344,8 @@ void RecastSourcesDock::onContextMenu(const QPoint &pos)
 	menu.exec(tree_->mapToGlobal(pos));
 }
 
-void RecastSourcesDock::createNewSource(const char *type_id,
-					const char *display_name)
+void RecastVerticalSourcesDock::createNewSource(const char *type_id,
+						const char *display_name)
 {
 	if (!current_scene_)
 		return;
@@ -366,7 +378,7 @@ void RecastSourcesDock::createNewSource(const char *type_id,
 	}
 }
 
-void RecastSourcesDock::onRemoveSource()
+void RecastVerticalSourcesDock::onRemoveSource()
 {
 	if (!current_scene_)
 		return;
@@ -379,7 +391,7 @@ void RecastSourcesDock::onRemoveSource()
 	}
 }
 
-void RecastSourcesDock::onMoveUp()
+void RecastVerticalSourcesDock::onMoveUp()
 {
 	if (!current_scene_)
 		return;
@@ -392,7 +404,7 @@ void RecastSourcesDock::onMoveUp()
 	}
 }
 
-void RecastSourcesDock::onMoveDown()
+void RecastVerticalSourcesDock::onMoveDown()
 {
 	if (!current_scene_)
 		return;
@@ -405,7 +417,7 @@ void RecastSourcesDock::onMoveDown()
 	}
 }
 
-void RecastSourcesDock::showTransformDialog(obs_sceneitem_t *item)
+void RecastVerticalSourcesDock::showTransformDialog(obs_sceneitem_t *item)
 {
 	if (!item)
 		return;
