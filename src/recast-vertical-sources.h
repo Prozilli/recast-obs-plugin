@@ -7,6 +7,8 @@ extern "C" {
 #include <obs.h>
 }
 
+class QMenu;
+
 class SourceTree;
 
 /*
@@ -49,6 +51,7 @@ private:
 	QPushButton *down_btn_;
 
 	void buildAddSourceMenu(QMenu *menu);
+	void buildTransformMenu(QMenu *menu, obs_sceneitem_t *item);
 	void createNewSource(const char *type_id, const char *display_name);
 	void showTransformDialog(obs_sceneitem_t *item);
 };

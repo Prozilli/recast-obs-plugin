@@ -7,6 +7,7 @@
  */
 
 #include "recast-vertical-sources.h"
+#include "recast-preview-widget.h"
 #include "recast-source-tree.h"
 #include "recast-vertical.h"
 
@@ -286,11 +287,10 @@ void RecastVerticalSourcesDock::onContextMenu(const QPoint &pos)
 
 		menu.addSeparator();
 
-		/* Transform */
-		QAction *transform_action = menu.addAction(
+		/* Transform submenu */
+		QMenu *transform_menu = menu.addMenu(
 			obs_module_text("Recast.Sources.Transform"));
-		connect(transform_action, &QAction::triggered, this,
-			[this, si]() { showTransformDialog(si); });
+		buildTransformMenu(transform_menu, si);
 
 		menu.addSeparator();
 
@@ -470,6 +470,57 @@ void RecastVerticalSourcesDock::onMoveDown()
 		tree_->refreshItems();
 		emit sourcesModified();
 	}
+}
+
+void RecastVerticalSourcesDock::buildTransformMenu(QMenu *menu,
+						    obs_sceneitem_t *item)
+{
+	RecastVertical *v = RecastVertical::instance();
+	int cw = v->canvasWidth();
+	int ch = v->canvasHeight();
+
+	QAction *fit_act = menu->addAction("Fit to Canvas");
+	connect(fit_act, &QAction::triggered, this, [this, item, cw, ch]() {
+		RecastPreviewWidget::FitToCanvas(item, cw, ch);
+		emit sourcesModified();
+	});
+
+	QAction *stretch_act = menu->addAction("Stretch to Canvas");
+	connect(stretch_act, &QAction::triggered, this,
+		[this, item, cw, ch]() {
+			RecastPreviewWidget::StretchToCanvas(item, cw, ch);
+			emit sourcesModified();
+		});
+
+	QAction *center_act = menu->addAction("Center on Canvas");
+	connect(center_act, &QAction::triggered, this,
+		[this, item, cw, ch]() {
+			RecastPreviewWidget::CenterOnCanvas(item, cw, ch);
+			emit sourcesModified();
+		});
+
+	menu->addSeparator();
+
+	QAction *flip_h_act = menu->addAction("Flip Horizontal");
+	connect(flip_h_act, &QAction::triggered, this,
+		[this, item, cw]() {
+			RecastPreviewWidget::FlipHorizontal(item, cw);
+			emit sourcesModified();
+		});
+
+	QAction *flip_v_act = menu->addAction("Flip Vertical");
+	connect(flip_v_act, &QAction::triggered, this,
+		[this, item, ch]() {
+			RecastPreviewWidget::FlipVertical(item, ch);
+			emit sourcesModified();
+		});
+
+	menu->addSeparator();
+
+	/* Edit Transform (dialog) */
+	QAction *edit_act = menu->addAction("Edit Transform...");
+	connect(edit_act, &QAction::triggered, this,
+		[this, item]() { showTransformDialog(item); });
 }
 
 void RecastVerticalSourcesDock::showTransformDialog(obs_sceneitem_t *item)

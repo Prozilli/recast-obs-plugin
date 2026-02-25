@@ -6,6 +6,8 @@ extern "C" {
 #include <obs.h>
 }
 
+class QMenu;
+
 /* Handle indices for resize anchors */
 enum RecastHandle {
 	HANDLE_NONE = -1,
@@ -31,6 +33,13 @@ public:
 
 	obs_sceneitem_t *GetSelectedItem() const { return selected_item; }
 
+	/* Transform helpers — operate on a scene item + canvas dims */
+	static void FitToCanvas(obs_sceneitem_t *item, int cw, int ch);
+	static void StretchToCanvas(obs_sceneitem_t *item, int cw, int ch);
+	static void CenterOnCanvas(obs_sceneitem_t *item, int cw, int ch);
+	static void FlipHorizontal(obs_sceneitem_t *item, int cw);
+	static void FlipVertical(obs_sceneitem_t *item, int ch);
+
 public slots:
 	void SetSelectedItem(obs_sceneitem_t *item);
 
@@ -45,6 +54,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *event) override;
 	void mouseDoubleClickEvent(QMouseEvent *event) override;
 	void mouseReleaseEvent(QMouseEvent *event) override;
+	void keyPressEvent(QKeyEvent *event) override;
 
 private:
 	obs_display_t *display = nullptr;
@@ -68,6 +78,8 @@ private:
 	int HitTestHandles(float scene_x, float scene_y);
 	void GetItemRect(obs_sceneitem_t *item, float &x, float &y,
 			 float &w, float &h);
+
+	void ShowContextMenu(QPoint widget_pos);
 
 	static void DrawCallback(void *param, uint32_t cx, uint32_t cy);
 	static void DrawSelectionOverlay(RecastPreviewWidget *widget);

@@ -7,6 +7,10 @@
 
 #include "recast-preview-widget.h"
 
+#include <QAction>
+#include <QKeyEvent>
+#include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QWindow>
 
@@ -41,6 +45,126 @@ static inline void GetScaleAndCenterPos(int baseCX, int baseCY, int windowCX,
 
 	x = windowCX / 2 - newCX / 2;
 	y = windowCY / 2 - newCY / 2;
+}
+
+/* ---- Source dimensions after crop ---- */
+
+static void GetCroppedSize(obs_sceneitem_t *item, float &cx, float &cy)
+{
+	obs_source_t *src = obs_sceneitem_get_source(item);
+	if (!src) { cx = cy = 0; return; }
+
+	cx = (float)obs_source_get_width(src);
+	cy = (float)obs_source_get_height(src);
+
+	struct obs_sceneitem_crop crop;
+	obs_sceneitem_get_crop(item, &crop);
+
+	cx -= (float)(crop.left + crop.right);
+	cy -= (float)(crop.top + crop.bottom);
+	if (cx < 1.0f) cx = 1.0f;
+	if (cy < 1.0f) cy = 1.0f;
+}
+
+/* ---- Transform helpers ---- */
+
+void RecastPreviewWidget::FitToCanvas(obs_sceneitem_t *item, int cw, int ch)
+{
+	if (!item) return;
+
+	float src_cx, src_cy;
+	GetCroppedSize(item, src_cx, src_cy);
+	if (src_cx <= 0 || src_cy <= 0) return;
+
+	float scale = std::min((float)cw / src_cx, (float)ch / src_cy);
+
+	struct vec2 sc = {scale, scale};
+	obs_sceneitem_set_scale(item, &sc);
+
+	float disp_w = src_cx * scale;
+	float disp_h = src_cy * scale;
+	struct vec2 pos = {((float)cw - disp_w) / 2.0f,
+			   ((float)ch - disp_h) / 2.0f};
+	obs_sceneitem_set_pos(item, &pos);
+}
+
+void RecastPreviewWidget::StretchToCanvas(obs_sceneitem_t *item, int cw, int ch)
+{
+	if (!item) return;
+
+	float src_cx, src_cy;
+	GetCroppedSize(item, src_cx, src_cy);
+	if (src_cx <= 0 || src_cy <= 0) return;
+
+	struct vec2 sc = {(float)cw / src_cx, (float)ch / src_cy};
+	obs_sceneitem_set_scale(item, &sc);
+
+	struct vec2 pos = {0.0f, 0.0f};
+	obs_sceneitem_set_pos(item, &pos);
+}
+
+void RecastPreviewWidget::CenterOnCanvas(obs_sceneitem_t *item, int cw, int ch)
+{
+	if (!item) return;
+
+	float src_cx, src_cy;
+	GetCroppedSize(item, src_cx, src_cy);
+
+	struct vec2 sc;
+	obs_sceneitem_get_scale(item, &sc);
+
+	float disp_w = src_cx * std::fabs(sc.x);
+	float disp_h = src_cy * std::fabs(sc.y);
+
+	struct vec2 pos;
+	pos.x = ((float)cw - disp_w) / 2.0f;
+	pos.y = ((float)ch - disp_h) / 2.0f;
+
+	/* For flipped items, adjust position so visible area centers */
+	if (sc.x < 0.0f) pos.x += disp_w;
+	if (sc.y < 0.0f) pos.y += disp_h;
+
+	obs_sceneitem_set_pos(item, &pos);
+}
+
+void RecastPreviewWidget::FlipHorizontal(obs_sceneitem_t *item, int cw)
+{
+	if (!item) return;
+
+	float src_cx, src_cy;
+	GetCroppedSize(item, src_cx, src_cy);
+
+	struct vec2 sc;
+	obs_sceneitem_get_scale(item, &sc);
+	struct vec2 pos;
+	obs_sceneitem_get_pos(item, &pos);
+
+	float disp_w = src_cx * sc.x; /* signed width */
+	sc.x = -sc.x;
+	pos.x = pos.x + disp_w;
+
+	obs_sceneitem_set_scale(item, &sc);
+	obs_sceneitem_set_pos(item, &pos);
+}
+
+void RecastPreviewWidget::FlipVertical(obs_sceneitem_t *item, int ch)
+{
+	if (!item) return;
+
+	float src_cx, src_cy;
+	GetCroppedSize(item, src_cx, src_cy);
+
+	struct vec2 sc;
+	obs_sceneitem_get_scale(item, &sc);
+	struct vec2 pos;
+	obs_sceneitem_get_pos(item, &pos);
+
+	float disp_h = src_cy * sc.y; /* signed height */
+	sc.y = -sc.y;
+	pos.y = pos.y + disp_h;
+
+	obs_sceneitem_set_scale(item, &sc);
+	obs_sceneitem_set_pos(item, &pos);
 }
 
 /* ---- Constructor / Destructor ---- */
@@ -329,7 +453,29 @@ int RecastPreviewWidget::HitTestHandles(float scene_x, float scene_y)
 
 void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 {
-	if (!interactive_scene || event->button() != Qt::LeftButton) {
+	if (!interactive_scene) {
+		QWidget::mousePressEvent(event);
+		return;
+	}
+
+	/* Right-click: context menu */
+	if (event->button() == Qt::RightButton) {
+		/* Hit-test and select item under cursor */
+		QPointF sp = WidgetToScene(event->pos());
+		obs_sceneitem_t *hit = HitTestItems((float)sp.x(),
+						    (float)sp.y());
+		if (hit) {
+			if (selected_item)
+				obs_sceneitem_release(selected_item);
+			selected_item = hit;
+			obs_sceneitem_addref(selected_item);
+			emit itemSelected(selected_item);
+		}
+		ShowContextMenu(event->pos());
+		return;
+	}
+
+	if (event->button() != Qt::LeftButton) {
 		QWidget::mousePressEvent(event);
 		return;
 	}
@@ -630,6 +776,224 @@ void RecastPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
 			emit itemTransformed();
 	}
 	QWidget::mouseReleaseEvent(event);
+}
+
+/* ---- Right-click context menu ---- */
+
+void RecastPreviewWidget::ShowContextMenu(QPoint widget_pos)
+{
+	QMenu menu(this);
+
+	if (selected_item) {
+		obs_source_t *src = obs_sceneitem_get_source(selected_item);
+		bool locked = obs_sceneitem_locked(selected_item);
+		bool visible = obs_sceneitem_visible(selected_item);
+
+		/* Transform submenu */
+		QMenu *transform_menu = menu.addMenu("Transform");
+
+		QAction *fit_act = transform_menu->addAction("Fit to Canvas");
+		connect(fit_act, &QAction::triggered, this, [this]() {
+			FitToCanvas(selected_item, canvas_width, canvas_height);
+			emit itemTransformed();
+		});
+
+		QAction *stretch_act =
+			transform_menu->addAction("Stretch to Canvas");
+		connect(stretch_act, &QAction::triggered, this, [this]() {
+			StretchToCanvas(selected_item, canvas_width,
+					canvas_height);
+			emit itemTransformed();
+		});
+
+		QAction *center_act =
+			transform_menu->addAction("Center on Canvas");
+		connect(center_act, &QAction::triggered, this, [this]() {
+			CenterOnCanvas(selected_item, canvas_width,
+				       canvas_height);
+			emit itemTransformed();
+		});
+
+		transform_menu->addSeparator();
+
+		QAction *flip_h_act =
+			transform_menu->addAction("Flip Horizontal");
+		connect(flip_h_act, &QAction::triggered, this, [this]() {
+			FlipHorizontal(selected_item, canvas_width);
+			emit itemTransformed();
+		});
+
+		QAction *flip_v_act =
+			transform_menu->addAction("Flip Vertical");
+		connect(flip_v_act, &QAction::triggered, this, [this]() {
+			FlipVertical(selected_item, canvas_height);
+			emit itemTransformed();
+		});
+
+		menu.addSeparator();
+
+		/* Properties */
+		QAction *props_act = menu.addAction("Properties");
+		connect(props_act, &QAction::triggered, this, [src]() {
+			if (src)
+				obs_frontend_open_source_properties(src);
+		});
+
+		/* Filters */
+		QAction *filters_act = menu.addAction("Filters");
+		connect(filters_act, &QAction::triggered, this, [src]() {
+			if (src)
+				obs_frontend_open_source_filters(src);
+		});
+
+		menu.addSeparator();
+
+		/* Lock / Unlock */
+		QAction *lock_act = menu.addAction(locked ? "Unlock" : "Lock");
+		connect(lock_act, &QAction::triggered, this,
+			[this, locked]() {
+				obs_sceneitem_set_locked(selected_item,
+							 !locked);
+			});
+
+		/* Hide / Show */
+		QAction *vis_act =
+			menu.addAction(visible ? "Hide" : "Show");
+		connect(vis_act, &QAction::triggered, this,
+			[this, visible]() {
+				obs_sceneitem_set_visible(selected_item,
+							  !visible);
+			});
+
+		menu.addSeparator();
+
+		/* Remove */
+		QAction *remove_act = menu.addAction("Remove");
+		connect(remove_act, &QAction::triggered, this, [this]() {
+			QMessageBox::StandardButton reply =
+				QMessageBox::question(
+					this, "Remove Source",
+					"Remove this source from the scene?",
+					QMessageBox::Yes | QMessageBox::No);
+			if (reply == QMessageBox::Yes) {
+				obs_sceneitem_t *item = selected_item;
+				selected_item = nullptr;
+				emit itemSelected(nullptr);
+				obs_sceneitem_remove(item);
+				obs_sceneitem_release(item);
+				emit itemTransformed();
+			}
+		});
+	} else {
+		QAction *no_sel = menu.addAction("No source selected");
+		no_sel->setEnabled(false);
+	}
+
+	menu.exec(mapToGlobal(widget_pos));
+}
+
+/* ---- Keyboard shortcuts ---- */
+
+void RecastPreviewWidget::keyPressEvent(QKeyEvent *event)
+{
+	if (!interactive_scene || !selected_item) {
+		QWidget::keyPressEvent(event);
+		return;
+	}
+
+	bool handled = true;
+	int key = event->key();
+	Qt::KeyboardModifiers mods = event->modifiers();
+
+	/* Arrow key nudge */
+	if (key == Qt::Key_Left || key == Qt::Key_Right ||
+	    key == Qt::Key_Up || key == Qt::Key_Down) {
+		if (obs_sceneitem_locked(selected_item))
+			return;
+
+		float step = (mods & Qt::ShiftModifier) ? 10.0f : 1.0f;
+		struct vec2 pos;
+		obs_sceneitem_get_pos(selected_item, &pos);
+
+		switch (key) {
+		case Qt::Key_Left:  pos.x -= step; break;
+		case Qt::Key_Right: pos.x += step; break;
+		case Qt::Key_Up:    pos.y -= step; break;
+		case Qt::Key_Down:  pos.y += step; break;
+		}
+
+		obs_sceneitem_set_pos(selected_item, &pos);
+		emit itemTransformed();
+
+	/* Delete: remove with confirmation */
+	} else if (key == Qt::Key_Delete) {
+		QMessageBox::StandardButton reply = QMessageBox::question(
+			this, "Remove Source",
+			"Remove this source from the scene?",
+			QMessageBox::Yes | QMessageBox::No);
+		if (reply == QMessageBox::Yes) {
+			obs_sceneitem_t *item = selected_item;
+			selected_item = nullptr;
+			emit itemSelected(nullptr);
+			obs_sceneitem_remove(item);
+			obs_sceneitem_release(item);
+			emit itemTransformed();
+		}
+
+	/* Ctrl+D: duplicate selected source */
+	} else if (key == Qt::Key_D && (mods & Qt::ControlModifier)) {
+		obs_source_t *src = obs_sceneitem_get_source(selected_item);
+		if (src && interactive_scene) {
+			obs_sceneitem_t *dup =
+				obs_scene_add(interactive_scene, src);
+			if (dup) {
+				/* Copy transform from original */
+				struct vec2 pos, sc;
+				obs_sceneitem_get_pos(selected_item, &pos);
+				obs_sceneitem_get_scale(selected_item, &sc);
+				float rot = obs_sceneitem_get_rot(selected_item);
+				struct obs_sceneitem_crop crop;
+				obs_sceneitem_get_crop(selected_item, &crop);
+
+				/* Offset slightly so duplicate is visible */
+				pos.x += 20.0f;
+				pos.y += 20.0f;
+
+				obs_sceneitem_set_pos(dup, &pos);
+				obs_sceneitem_set_scale(dup, &sc);
+				obs_sceneitem_set_rot(dup, rot);
+				obs_sceneitem_set_crop(dup, &crop);
+
+				/* Select the duplicate */
+				obs_sceneitem_release(selected_item);
+				selected_item = dup;
+				obs_sceneitem_addref(selected_item);
+				emit itemSelected(selected_item);
+				emit itemTransformed();
+			}
+		}
+
+	/* Ctrl+F: fit to canvas */
+	} else if (key == Qt::Key_F && (mods & Qt::ControlModifier)) {
+		FitToCanvas(selected_item, canvas_width, canvas_height);
+		emit itemTransformed();
+
+	/* Ctrl+R: stretch to canvas */
+	} else if (key == Qt::Key_R && (mods & Qt::ControlModifier)) {
+		StretchToCanvas(selected_item, canvas_width, canvas_height);
+		emit itemTransformed();
+
+	/* Ctrl+E: center on canvas */
+	} else if (key == Qt::Key_E && (mods & Qt::ControlModifier)) {
+		CenterOnCanvas(selected_item, canvas_width, canvas_height);
+		emit itemTransformed();
+
+	} else {
+		handled = false;
+	}
+
+	if (!handled)
+		QWidget::keyPressEvent(event);
 }
 
 /* ---- Selection overlay drawing ---- */
