@@ -55,11 +55,14 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 	: QFrame(parent), item_(item)
 {
 	setFrameShape(QFrame::NoFrame);
-	setFixedHeight(24);
+	setFixedHeight(28);
+	setStyleSheet(
+		"SourceTreeItem { background: transparent; "
+		"border-bottom: 1px solid #2a2a2a; }");
 
 	auto *layout = new QHBoxLayout(this);
-	layout->setContentsMargins(2, 0, 2, 0);
-	layout->setSpacing(4);
+	layout->setContentsMargins(4, 2, 4, 2);
+	layout->setSpacing(6);
 
 	/* Type icon */
 	icon_label_ = new QLabel;
@@ -75,6 +78,8 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 	name_label_ = new QLabel;
 	name_label_->setSizePolicy(QSizePolicy::Expanding,
 				   QSizePolicy::Preferred);
+	name_label_->setStyleSheet(
+		"QLabel { color: #ddd; font-size: 12px; }");
 	if (src) {
 		const char *name = obs_source_get_name(src);
 		name_label_->setText(
@@ -93,36 +98,40 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 		this, &SourceTreeItem::onRenameFinished);
 	layout->addWidget(name_edit_, 1);
 
-	/* Visibility button */
+	/* Visibility button (eye icon) */
 	vis_btn_ = new QPushButton;
-	vis_btn_->setFixedSize(20, 20);
+	vis_btn_->setFixedSize(22, 22);
 	vis_btn_->setFlat(true);
 	vis_btn_->setCheckable(true);
 	vis_btn_->setChecked(obs_sceneitem_visible(item));
-	vis_btn_->setText(obs_sceneitem_visible(item) ? "E" : "H");
+	vis_btn_->setText(obs_sceneitem_visible(item)
+		? QString::fromUtf8("\xf0\x9f\x91\x81")   /* eye */
+		: QString::fromUtf8("\xe2\x80\x94"));       /* dash */
 	vis_btn_->setToolTip(
 		obs_module_text("Recast.SourceTree.Visibility"));
 	vis_btn_->setStyleSheet(
-		"QPushButton { font-size: 10px; padding: 0; }"
-		"QPushButton:checked { color: #fff; }"
-		"QPushButton:!checked { color: #666; }");
+		"QPushButton { font-size: 12px; padding: 0; border: none; }"
+		"QPushButton:checked { color: #ccc; }"
+		"QPushButton:!checked { color: #555; }");
 	connect(vis_btn_, &QPushButton::clicked,
 		this, &SourceTreeItem::onVisibilityClicked);
 	layout->addWidget(vis_btn_);
 
-	/* Lock button */
+	/* Lock button (padlock icon) */
 	lock_btn_ = new QPushButton;
-	lock_btn_->setFixedSize(20, 20);
+	lock_btn_->setFixedSize(22, 22);
 	lock_btn_->setFlat(true);
 	lock_btn_->setCheckable(true);
 	lock_btn_->setChecked(obs_sceneitem_locked(item));
-	lock_btn_->setText(obs_sceneitem_locked(item) ? "L" : "U");
+	lock_btn_->setText(obs_sceneitem_locked(item)
+		? QString::fromUtf8("\xf0\x9f\x94\x92")   /* locked */
+		: QString::fromUtf8("\xf0\x9f\x94\x93"));  /* unlocked */
 	lock_btn_->setToolTip(
 		obs_module_text("Recast.SourceTree.Lock"));
 	lock_btn_->setStyleSheet(
-		"QPushButton { font-size: 10px; padding: 0; }"
+		"QPushButton { font-size: 12px; padding: 0; border: none; }"
 		"QPushButton:checked { color: #f44; }"
-		"QPushButton:!checked { color: #666; }");
+		"QPushButton:!checked { color: #555; }");
 	connect(lock_btn_, &QPushButton::clicked,
 		this, &SourceTreeItem::onLockClicked);
 	layout->addWidget(lock_btn_);
@@ -134,10 +143,13 @@ void SourceTreeItem::setSelected(bool selected)
 {
 	if (selected) {
 		setStyleSheet(
-			"SourceTreeItem { background: #3d5a80; "
-			"border-radius: 2px; }");
+			"SourceTreeItem { background: #001c3f; "
+			"border-radius: 3px; "
+			"border-bottom: 1px solid #002a5f; }");
 	} else {
-		setStyleSheet("");
+		setStyleSheet(
+			"SourceTreeItem { background: transparent; "
+			"border-bottom: 1px solid #2a2a2a; }");
 	}
 }
 
@@ -152,11 +164,15 @@ void SourceTreeItem::update()
 
 	bool vis = obs_sceneitem_visible(item_);
 	vis_btn_->setChecked(vis);
-	vis_btn_->setText(vis ? "E" : "H");
+	vis_btn_->setText(vis
+		? QString::fromUtf8("\xf0\x9f\x91\x81")
+		: QString::fromUtf8("\xe2\x80\x94"));
 
 	bool locked = obs_sceneitem_locked(item_);
 	lock_btn_->setChecked(locked);
-	lock_btn_->setText(locked ? "L" : "U");
+	lock_btn_->setText(locked
+		? QString::fromUtf8("\xf0\x9f\x94\x92")
+		: QString::fromUtf8("\xf0\x9f\x94\x93"));
 }
 
 QIcon SourceTreeItem::getSourceTypeIcon(obs_source_t *source)
@@ -225,7 +241,9 @@ void SourceTreeItem::onVisibilityClicked()
 {
 	bool visible = vis_btn_->isChecked();
 	obs_sceneitem_set_visible(item_, visible);
-	vis_btn_->setText(visible ? "E" : "H");
+	vis_btn_->setText(visible
+		? QString::fromUtf8("\xf0\x9f\x91\x81")
+		: QString::fromUtf8("\xe2\x80\x94"));
 	emit visibilityToggled(item_, visible);
 }
 
@@ -233,7 +251,9 @@ void SourceTreeItem::onLockClicked()
 {
 	bool locked = lock_btn_->isChecked();
 	obs_sceneitem_set_locked(item_, locked);
-	lock_btn_->setText(locked ? "L" : "U");
+	lock_btn_->setText(locked
+		? QString::fromUtf8("\xf0\x9f\x94\x92")
+		: QString::fromUtf8("\xf0\x9f\x94\x93"));
 	emit lockToggled(item_, locked);
 }
 

@@ -23,6 +23,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <set>
 #include <vector>
 
 extern "C" {
@@ -39,6 +40,7 @@ RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
 	setFeatures(QDockWidget::DockWidgetMovable |
 		    QDockWidget::DockWidgetFloatable |
 		    QDockWidget::DockWidgetClosable);
+	setTitleBarWidget(new QWidget());
 
 	auto *container = new QWidget;
 	auto *layout = new QVBoxLayout(container);
@@ -58,28 +60,50 @@ RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
 	/* Toolbar */
 	auto *toolbar = new QHBoxLayout;
 
+	QString btn_style_add =
+		"QPushButton { font-size: 16px; font-weight: bold; "
+		"border: 1px solid #444; border-radius: 4px; "
+		"background: #001c3f; color: #fff; }"
+		"QPushButton:hover { background: #002a5f; }";
+	QString btn_style_remove =
+		"QPushButton { font-size: 16px; font-weight: bold; "
+		"border: 1px solid #444; border-radius: 4px; "
+		"background: #910000; color: #fff; }"
+		"QPushButton:hover { background: #b10000; }";
+	QString btn_style_arrow =
+		"QPushButton { font-size: 14px; "
+		"border: 1px solid #444; border-radius: 4px; "
+		"background: #2a2a2a; color: #ccc; }"
+		"QPushButton:hover { background: #3a3a3a; }";
+
 	add_btn_ = new QPushButton("+");
-	add_btn_->setFixedWidth(28);
+	add_btn_->setFixedSize(28, 28);
 	add_btn_->setToolTip(obs_module_text("Recast.Sources.Add"));
+	add_btn_->setStyleSheet(btn_style_add);
 	connect(add_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onAddSource);
 	toolbar->addWidget(add_btn_);
 
-	remove_btn_ = new QPushButton("-");
-	remove_btn_->setFixedWidth(28);
+	remove_btn_ = new QPushButton(QString::fromUtf8("\xe2\x80\x93"));
+	remove_btn_->setFixedSize(28, 28);
 	remove_btn_->setToolTip(obs_module_text("Recast.Sources.Remove"));
+	remove_btn_->setStyleSheet(btn_style_remove);
 	connect(remove_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onRemoveSource);
 	toolbar->addWidget(remove_btn_);
 
-	up_btn_ = new QPushButton(obs_module_text("Recast.Sources.Up"));
-	up_btn_->setFixedWidth(30);
+	up_btn_ = new QPushButton(QString::fromUtf8("\xe2\x96\xb2")); /* triangle up */
+	up_btn_->setFixedSize(28, 28);
+	up_btn_->setToolTip(obs_module_text("Recast.Sources.Up"));
+	up_btn_->setStyleSheet(btn_style_arrow);
 	connect(up_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onMoveUp);
 	toolbar->addWidget(up_btn_);
 
-	down_btn_ = new QPushButton(obs_module_text("Recast.Sources.Down"));
-	down_btn_->setFixedWidth(30);
+	down_btn_ = new QPushButton(QString::fromUtf8("\xe2\x96\xbc")); /* triangle down */
+	down_btn_->setFixedSize(28, 28);
+	down_btn_->setToolTip(obs_module_text("Recast.Sources.Down"));
+	down_btn_->setStyleSheet(btn_style_arrow);
 	connect(down_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onMoveDown);
 	toolbar->addWidget(down_btn_);
@@ -163,21 +187,33 @@ void RecastVerticalSourcesDock::buildAddSourceMenu(QMenu *menu)
 	/* Separator */
 	menu->addSeparator();
 
-	/* Section: All available input source types */
+	/* Section: All available input source types (deduplicated) */
 	std::vector<source_type_entry> types;
+	std::set<QString> seen_names;
 
 	const char *type_id;
 	for (size_t i = 0; obs_enum_input_types(i, &type_id); i++) {
 		if (!type_id || !*type_id)
 			continue;
 
+		/* Skip deprecated sources */
+		uint32_t caps = obs_get_source_output_flags(type_id);
+		if (caps & OBS_SOURCE_DEPRECATED)
+			continue;
+
 		const char *display = obs_source_get_display_name(type_id);
 		if (!display || !*display)
 			continue;
 
+		/* Deduplicate by display name (e.g. Color v2/v3) */
+		QString display_str = QString::fromUtf8(display);
+		if (seen_names.count(display_str))
+			continue;
+		seen_names.insert(display_str);
+
 		source_type_entry e;
 		e.id = QString::fromUtf8(type_id);
-		e.display_name = QString::fromUtf8(display);
+		e.display_name = display_str;
 		types.push_back(e);
 	}
 

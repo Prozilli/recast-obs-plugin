@@ -51,11 +51,15 @@ uint64_t recast_destination_elapsed_sec(const recast_destination_t *dest);
 
 /* ---- Add Destination Dialog ---- */
 
-class RecastAddDestinationDialog : public QDialog {
+class RecastDestinationDialog : public QDialog {
 	Q_OBJECT
 
 public:
-	explicit RecastAddDestinationDialog(QWidget *parent = nullptr);
+	explicit RecastDestinationDialog(QWidget *parent = nullptr,
+		const QString &name = QString(),
+		const QString &url = QString(),
+		const QString &key = QString(),
+		bool canvas_vertical = false);
 
 	QString getName() const;
 	QString getUrl() const;
@@ -84,6 +88,7 @@ public:
 
 signals:
 	void deleteRequested(RecastDestinationRow *row);
+	void editRequested(RecastDestinationRow *row);
 	void autoChanged(RecastDestinationRow *row);
 
 private slots:
@@ -91,10 +96,12 @@ private slots:
 
 private:
 	recast_destination_t *dest_;
+	QLabel *name_label_;
 	QLabel *status_label_;
 	QLabel *platform_icon_label_;
 	QLabel *canvas_label_;
 	QPushButton *toggle_btn_;
+	QPushButton *edit_btn_;
 	QPushButton *delete_btn_;
 	QCheckBox *auto_check_;
 };
@@ -117,6 +124,7 @@ signals:
 
 private slots:
 	void onAddDestination();
+	void onEditDestination(RecastDestinationRow *row);
 	void onDeleteDestination(RecastDestinationRow *row);
 	void onSyncServer();
 	void onRefreshTimer();

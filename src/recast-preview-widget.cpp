@@ -56,8 +56,7 @@ RecastPreviewWidget::RecastPreviewWidget(QWidget *parent)
 	setMouseTracking(true);
 	setFocusPolicy(Qt::ClickFocus);
 
-	setMinimumHeight(200);
-	setMaximumHeight(400);
+	setMinimumHeight(100);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
@@ -103,7 +102,8 @@ void RecastPreviewWidget::CreateDisplay()
 	info.window.display = obs_get_nix_platform_display();
 #endif
 
-	display = obs_display_create(&info, 0xFF2D2D2D);
+	/* Prozilli navy (#001c3f) for letterbox area — ABGR format */
+	display = obs_display_create(&info, 0xFF3F1C00);
 	obs_display_add_draw_callback(display, DrawCallback, this);
 }
 
@@ -340,7 +340,8 @@ void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 	/* First check if clicking on a handle of the selected item */
 	int handle = HitTestHandles(sx, sy);
 
-	if (handle != HANDLE_NONE && selected_item) {
+	if (handle != HANDLE_NONE && selected_item &&
+	    !obs_sceneitem_locked(selected_item)) {
 		/* Start dragging a handle or body */
 		dragging = true;
 		drag_handle = handle;
@@ -376,7 +377,7 @@ void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
 		obs_sceneitem_addref(selected_item);
 	emit itemSelected(selected_item);
 
-	if (hit) {
+	if (hit && !obs_sceneitem_locked(hit)) {
 		dragging = true;
 		drag_handle = HANDLE_BODY;
 		drag_start_mouse = sp;
@@ -446,7 +447,8 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 		obs_sceneitem_set_pos(selected_item, &new_pos);
 
 	} else {
-		/* Resize via handles */
+		/* Resize via handles — aspect-ratio locked by default.
+		 * Hold Shift to resize freely without aspect lock. */
 		float new_pos_x = item_start_pos_x;
 		float new_pos_y = item_start_pos_y;
 		float new_sx = item_start_scale_x;
@@ -454,42 +456,78 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 
 		float orig_w = item_start_width * item_start_scale_x;
 		float orig_h = item_start_height * item_start_scale_y;
+		float aspect = (orig_h > 0.0f) ? (orig_w / orig_h) : 1.0f;
+
+		bool shift = (event->modifiers() & Qt::ShiftModifier);
 
 		switch (drag_handle) {
 		case HANDLE_BR:
 			new_sx = (orig_w + dx) / item_start_width;
-			new_sy = (orig_h + dy) / item_start_height;
+			if (shift) {
+				new_sy = (orig_h + dy) / item_start_height;
+			} else {
+				new_sy = new_sx * (item_start_width / item_start_height);
+			}
 			break;
 		case HANDLE_R:
 			new_sx = (orig_w + dx) / item_start_width;
+			if (!shift)
+				new_sy = new_sx * (item_start_width / item_start_height);
 			break;
 		case HANDLE_B:
 			new_sy = (orig_h + dy) / item_start_height;
+			if (!shift)
+				new_sx = new_sy * (item_start_height / item_start_width);
 			break;
-		case HANDLE_TL:
-			new_pos_x = item_start_pos_x + dx;
-			new_pos_y = item_start_pos_y + dy;
+		case HANDLE_TL: {
 			new_sx = (orig_w - dx) / item_start_width;
-			new_sy = (orig_h - dy) / item_start_height;
+			if (shift) {
+				new_sy = (orig_h - dy) / item_start_height;
+			} else {
+				new_sy = new_sx * (item_start_width / item_start_height);
+			}
+			float dw = item_start_width * (new_sx - item_start_scale_x);
+			float dh = item_start_height * (new_sy - item_start_scale_y);
+			new_pos_x = item_start_pos_x - dw;
+			new_pos_y = item_start_pos_y - dh;
 			break;
+		}
 		case HANDLE_T:
-			new_pos_y = item_start_pos_y + dy;
 			new_sy = (orig_h - dy) / item_start_height;
+			if (!shift)
+				new_sx = new_sy * (item_start_height / item_start_width);
+			new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y);
+			if (!shift)
+				new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x) * 0.5f;
 			break;
 		case HANDLE_L:
-			new_pos_x = item_start_pos_x + dx;
 			new_sx = (orig_w - dx) / item_start_width;
+			if (!shift)
+				new_sy = new_sx * (item_start_width / item_start_height);
+			new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x);
+			if (!shift)
+				new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y) * 0.5f;
 			break;
-		case HANDLE_TR:
-			new_pos_y = item_start_pos_y + dy;
+		case HANDLE_TR: {
 			new_sx = (orig_w + dx) / item_start_width;
-			new_sy = (orig_h - dy) / item_start_height;
+			if (shift) {
+				new_sy = (orig_h - dy) / item_start_height;
+			} else {
+				new_sy = new_sx * (item_start_width / item_start_height);
+			}
+			new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y);
 			break;
-		case HANDLE_BL:
-			new_pos_x = item_start_pos_x + dx;
+		}
+		case HANDLE_BL: {
 			new_sx = (orig_w - dx) / item_start_width;
-			new_sy = (orig_h + dy) / item_start_height;
+			if (shift) {
+				new_sy = (orig_h + dy) / item_start_height;
+			} else {
+				new_sy = new_sx * (item_start_width / item_start_height);
+			}
+			new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x);
 			break;
+		}
 		}
 
 		/* Clamp to minimum */

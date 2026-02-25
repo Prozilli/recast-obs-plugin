@@ -213,7 +213,9 @@ uint64_t recast_destination_elapsed_sec(const recast_destination_t *d)
  * RecastAddDestinationDialog
  * ==================================================================== */
 
-RecastAddDestinationDialog::RecastAddDestinationDialog(QWidget *parent)
+RecastDestinationDialog::RecastDestinationDialog(
+	QWidget *parent, const QString &name, const QString &url,
+	const QString &key, bool canvas_vertical)
 	: QDialog(parent)
 {
 	setWindowTitle(obs_module_text("Recast.Multistream.AddDest"));
@@ -223,15 +225,18 @@ RecastAddDestinationDialog::RecastAddDestinationDialog(QWidget *parent)
 
 	name_edit_ = new QLineEdit;
 	name_edit_->setPlaceholderText("e.g. Twitch, YouTube Shorts");
+	name_edit_->setText(name);
 	form->addRow(obs_module_text("Recast.Name"), name_edit_);
 
 	url_edit_ = new QLineEdit;
 	url_edit_->setPlaceholderText("rtmp://...");
+	url_edit_->setText(url);
 	form->addRow(obs_module_text("Recast.URL"), url_edit_);
 
 	key_edit_ = new QLineEdit;
 	key_edit_->setEchoMode(QLineEdit::Password);
 	key_edit_->setPlaceholderText("Stream key");
+	key_edit_->setText(key);
 	form->addRow(obs_module_text("Recast.Key"), key_edit_);
 
 	canvas_combo_ = new QComboBox;
@@ -239,6 +244,8 @@ RecastAddDestinationDialog::RecastAddDestinationDialog(QWidget *parent)
 		obs_module_text("Recast.Multistream.CanvasMain"), false);
 	canvas_combo_->addItem(
 		obs_module_text("Recast.Multistream.CanvasVertical"), true);
+	if (canvas_vertical)
+		canvas_combo_->setCurrentIndex(1);
 	form->addRow(obs_module_text("Recast.Multistream.Canvas"),
 		     canvas_combo_);
 
@@ -253,22 +260,22 @@ RecastAddDestinationDialog::RecastAddDestinationDialog(QWidget *parent)
 	root->addWidget(buttons);
 }
 
-QString RecastAddDestinationDialog::getName() const
+QString RecastDestinationDialog::getName() const
 {
 	return name_edit_->text();
 }
 
-QString RecastAddDestinationDialog::getUrl() const
+QString RecastDestinationDialog::getUrl() const
 {
 	return url_edit_->text();
 }
 
-QString RecastAddDestinationDialog::getKey() const
+QString RecastDestinationDialog::getKey() const
 {
 	return key_edit_->text();
 }
 
-bool RecastAddDestinationDialog::getCanvasVertical() const
+bool RecastDestinationDialog::getCanvasVertical() const
 {
 	return canvas_combo_->currentData().toBool();
 }
@@ -299,9 +306,9 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	layout->addWidget(platform_icon_label_);
 
 	/* Name */
-	QLabel *name_label = new QLabel(QString::fromUtf8(dest->name));
-	name_label->setStyleSheet("font-weight: bold;");
-	layout->addWidget(name_label, 1);
+	name_label_ = new QLabel(QString::fromUtf8(dest->name));
+	name_label_->setStyleSheet("font-weight: bold;");
+	layout->addWidget(name_label_, 1);
 
 	/* Canvas indicator */
 	canvas_label_ = new QLabel(
@@ -337,6 +344,14 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	connect(toggle_btn_, &QPushButton::clicked,
 		this, &RecastDestinationRow::onToggleStream);
 	layout->addWidget(toggle_btn_);
+
+	/* Edit button */
+	edit_btn_ = new QPushButton("Edit");
+	edit_btn_->setFixedWidth(40);
+	connect(edit_btn_, &QPushButton::clicked, this, [this]() {
+		emit editRequested(this);
+	});
+	layout->addWidget(edit_btn_);
 
 	/* Delete button */
 	delete_btn_ = new QPushButton("x");
@@ -411,6 +426,7 @@ RecastMultistreamDock::RecastMultistreamDock(QWidget *parent)
 	setFeatures(QDockWidget::DockWidgetMovable |
 		    QDockWidget::DockWidgetFloatable |
 		    QDockWidget::DockWidgetClosable);
+	setTitleBarWidget(new QWidget());
 
 	auto *scroll = new QScrollArea;
 	scroll->setWidgetResizable(true);
@@ -476,7 +492,7 @@ RecastMultistreamDock::~RecastMultistreamDock()
 
 void RecastMultistreamDock::onAddDestination()
 {
-	RecastAddDestinationDialog dlg(this);
+	RecastDestinationDialog dlg(this);
 	if (dlg.exec() != QDialog::Accepted)
 		return;
 
@@ -498,6 +514,107 @@ void RecastMultistreamDock::onAddDestination()
 		dlg.getCanvasVertical());
 
 	addRow(dest);
+	emit configChanged();
+}
+
+void RecastMultistreamDock::onEditDestination(RecastDestinationRow *row)
+{
+	if (!row)
+		return;
+
+	recast_destination_t *d = row->destination();
+
+	RecastDestinationDialog dlg(
+		this,
+		QString::fromUtf8(d->name),
+		QString::fromUtf8(d->url),
+		QString::fromUtf8(d->key),
+		d->canvas_vertical);
+
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	QString name = dlg.getName().trimmed();
+	QString url = dlg.getUrl().trimmed();
+	QString key = dlg.getKey().trimmed();
+
+	if (name.isEmpty() || url.isEmpty()) {
+		QMessageBox::warning(
+			this, obs_module_text("Recast.Error"),
+			obs_module_text("Recast.Error.NameUrlRequired"));
+		return;
+	}
+
+	/* Stop if active before changing settings */
+	bool was_active = d->active;
+	if (was_active)
+		recast_destination_stop(d);
+
+	/* Update fields */
+	bfree(d->name);
+	d->name = bstrdup(name.toUtf8().constData());
+	bfree(d->url);
+	d->url = bstrdup(url.toUtf8().constData());
+	bfree(d->key);
+	d->key = bstrdup(key.toUtf8().constData());
+	d->canvas_vertical = dlg.getCanvasVertical();
+	d->protocol = recast_protocol_detect(d->url);
+
+	/* Recreate service with new settings */
+	if (d->service) {
+		obs_service_release(d->service);
+		d->service = nullptr;
+	}
+	const char *service_id = recast_protocol_service_id(d->protocol);
+	obs_data_t *svc_settings = obs_data_create();
+	if (d->protocol == RECAST_PROTO_WHIP) {
+		obs_data_set_string(svc_settings, "server", d->url);
+		obs_data_set_string(svc_settings, "bearer_token", d->key);
+	} else {
+		obs_data_set_string(svc_settings, "server", d->url);
+		obs_data_set_string(svc_settings, "key", d->key);
+	}
+	struct dstr svc_name = {0};
+	dstr_printf(&svc_name, "recast_svc_%s", d->name);
+	d->service = obs_service_create(
+		service_id, svc_name.array, svc_settings, NULL);
+	dstr_free(&svc_name);
+	obs_data_release(svc_settings);
+
+	/* Recreate output with new protocol */
+	if (d->output) {
+		obs_output_release(d->output);
+		d->output = nullptr;
+	}
+	const char *output_id = recast_protocol_output_id(d->protocol);
+	struct dstr out_name = {0};
+	dstr_printf(&out_name, "recast_out_%s", d->name);
+	d->output = obs_output_create(
+		output_id, out_name.array, NULL, NULL);
+	dstr_free(&out_name);
+
+	/* Rebuild the row UI by removing and re-adding */
+	auto it = std::find(rows_.begin(), rows_.end(), row);
+	int pos = (it != rows_.end()) ? (int)(it - rows_.begin()) : -1;
+
+	if (pos >= 0) {
+		rows_.erase(it);
+		rows_layout_->removeWidget(row);
+		row->deleteLater();
+
+		auto *new_row = new RecastDestinationRow(d, this);
+		connect(new_row, &RecastDestinationRow::deleteRequested,
+			this, &RecastMultistreamDock::onDeleteDestination);
+		connect(new_row, &RecastDestinationRow::editRequested,
+			this, &RecastMultistreamDock::onEditDestination);
+		connect(new_row, &RecastDestinationRow::autoChanged,
+			this, [this](RecastDestinationRow *) {
+				emit configChanged();
+			});
+		rows_layout_->insertWidget(pos, new_row);
+		rows_.insert(rows_.begin() + pos, new_row);
+	}
+
 	emit configChanged();
 }
 
@@ -629,6 +746,8 @@ void RecastMultistreamDock::addRow(recast_destination_t *dest)
 	auto *row = new RecastDestinationRow(dest, this);
 	connect(row, &RecastDestinationRow::deleteRequested,
 		this, &RecastMultistreamDock::onDeleteDestination);
+	connect(row, &RecastDestinationRow::editRequested,
+		this, &RecastMultistreamDock::onEditDestination);
 	connect(row, &RecastDestinationRow::autoChanged,
 		this, [this](RecastDestinationRow *) { emit configChanged(); });
 	rows_layout_->addWidget(row);

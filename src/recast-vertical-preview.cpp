@@ -21,12 +21,15 @@ RecastVerticalPreviewDock::RecastVerticalPreviewDock(QWidget *parent)
 	setFeatures(QDockWidget::DockWidgetMovable |
 		    QDockWidget::DockWidgetFloatable |
 		    QDockWidget::DockWidgetClosable);
+	/* Hide our title bar; OBS frontend adds its own dock frame */
+	setTitleBarWidget(new QWidget());
 
 	auto *container = new QWidget;
 	auto *layout = new QVBoxLayout(container);
-	layout->setContentsMargins(0, 0, 0, 0);
+	layout->setContentsMargins(2, 2, 2, 2);
 
 	preview_ = new RecastPreviewWidget;
+	preview_->setStyleSheet("border: 1px solid #001c3f;");
 	layout->addWidget(preview_);
 
 	setWidget(container);
