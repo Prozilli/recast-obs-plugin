@@ -17,6 +17,7 @@
 #include <vector>
 
 extern "C" {
+#include <obs.h>
 #include "recast-output.h"
 #include "recast-config.h"
 }
@@ -47,6 +48,33 @@ private:
 	void populateScenes();
 };
 
+/* ---- Live Preview Widget ---- */
+
+class RecastPreviewWidget : public QWidget {
+	Q_OBJECT
+
+public:
+	explicit RecastPreviewWidget(QWidget *parent = nullptr);
+	~RecastPreviewWidget();
+
+	void SetScene(obs_source_t *scene, int w, int h);
+	void ClearScene();
+
+protected:
+	void paintEvent(QPaintEvent *event) override;
+	void resizeEvent(QResizeEvent *event) override;
+
+private:
+	obs_display_t *display = nullptr;
+	obs_source_t *scene_source = nullptr;
+	int canvas_width = 0;
+	int canvas_height = 0;
+
+	void CreateDisplay();
+
+	static void DrawCallback(void *param, uint32_t cx, uint32_t cy);
+};
+
 /* ---- Single Output Card ---- */
 
 class RecastOutputCard : public QGroupBox {
@@ -60,14 +88,22 @@ public:
 	recast_output_target_t *target() const { return target_; }
 	void refreshStatus();
 
+	bool isSelected() const { return selected_; }
+	void setSelected(bool sel);
+
 signals:
 	void deleteRequested(RecastOutputCard *card);
+	void clicked(RecastOutputCard *card);
+
+protected:
+	void mousePressEvent(QMouseEvent *event) override;
 
 private slots:
 	void onToggleStream();
 
 private:
 	recast_output_target_t *target_;
+	bool selected_ = false;
 	QLabel *status_label;
 	QPushButton *toggle_btn;
 	QPushButton *delete_btn;
@@ -87,9 +123,13 @@ private slots:
 	void onDeleteOutput(RecastOutputCard *card);
 	void onSyncServer();
 	void onRefreshTimer();
+	void onCardClicked(RecastOutputCard *card);
 
 private:
 	QVBoxLayout *cards_layout;
+	QLabel *preview_label;
+	RecastPreviewWidget *preview;
+	RecastOutputCard *selected_card = nullptr;
 	QTimer *refresh_timer;
 	QNetworkAccessManager *net_mgr;
 	std::vector<RecastOutputCard *> cards;
@@ -98,6 +138,7 @@ private:
 	void saveToConfig();
 	void addCard(recast_output_target_t *target);
 	void removeCard(RecastOutputCard *card);
+	void selectCard(RecastOutputCard *card);
 };
 
 #ifdef __cplusplus

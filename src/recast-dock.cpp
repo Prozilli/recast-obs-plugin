@@ -18,11 +18,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QScrollArea>
+#include <QWindow>
 
 extern "C" {
 #include <obs-frontend-api.h>
 #include <obs-module.h>
+#include <graphics/graphics.h>
 #include <util/platform.h>
 }
 
@@ -103,6 +106,152 @@ QString RecastAddDialog::getScene() const
 
 int RecastAddDialog::getWidth() const { return width_spin->value(); }
 int RecastAddDialog::getHeight() const { return height_spin->value(); }
+
+/* ====================================================================
+ * RecastPreviewWidget
+ * ==================================================================== */
+
+static inline void GetScaleAndCenterPos(int baseCX, int baseCY, int windowCX,
+					int windowCY, int &x, int &y,
+					float &scale)
+{
+	double windowAspect = double(windowCX) / double(windowCY);
+	double baseAspect = double(baseCX) / double(baseCY);
+	int newCX, newCY;
+
+	if (windowAspect > baseAspect) {
+		scale = float(windowCY) / float(baseCY);
+		newCX = int(double(windowCY) * baseAspect);
+		newCY = windowCY;
+	} else {
+		scale = float(windowCX) / float(baseCX);
+		newCX = windowCX;
+		newCY = int(float(windowCX) / baseAspect);
+	}
+
+	x = windowCX / 2 - newCX / 2;
+	y = windowCY / 2 - newCY / 2;
+}
+
+RecastPreviewWidget::RecastPreviewWidget(QWidget *parent)
+	: QWidget(parent)
+{
+	setAttribute(Qt::WA_PaintOnScreen);
+	setAttribute(Qt::WA_StaticContents);
+	setAttribute(Qt::WA_NoSystemBackground);
+	setAttribute(Qt::WA_OpaquePaintEvent);
+	setAttribute(Qt::WA_NativeWindow);
+
+	setMinimumHeight(200);
+	setMaximumHeight(400);
+	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+}
+
+RecastPreviewWidget::~RecastPreviewWidget()
+{
+	if (display) {
+		obs_display_remove_draw_callback(display, DrawCallback, this);
+		obs_display_destroy(display);
+		display = nullptr;
+	}
+	if (scene_source) {
+		obs_source_release(scene_source);
+		scene_source = nullptr;
+	}
+}
+
+void RecastPreviewWidget::CreateDisplay()
+{
+	if (display)
+		return;
+
+	if (!windowHandle() || !windowHandle()->isExposed())
+		return;
+
+	QSize size = this->size() * this->devicePixelRatioF();
+
+	gs_init_data info = {};
+	info.cx = size.width();
+	info.cy = size.height();
+	info.format = GS_BGRA;
+	info.zsformat = GS_ZS_NONE;
+
+#ifdef _WIN32
+	info.window.hwnd = (HWND)windowHandle()->winId();
+#elif __APPLE__
+	info.window.view = (id)windowHandle()->winId();
+#else
+	info.window.id = windowHandle()->winId();
+	info.window.display = obs_get_nix_platform_display();
+#endif
+
+	display = obs_display_create(&info, 0xFF2D2D2D);
+	obs_display_add_draw_callback(display, DrawCallback, this);
+}
+
+void RecastPreviewWidget::SetScene(obs_source_t *scene, int w, int h)
+{
+	if (scene_source) {
+		obs_source_release(scene_source);
+		scene_source = nullptr;
+	}
+	if (scene) {
+		scene_source = obs_source_get_ref(scene);
+	}
+	canvas_width = w;
+	canvas_height = h;
+}
+
+void RecastPreviewWidget::ClearScene()
+{
+	if (scene_source) {
+		obs_source_release(scene_source);
+		scene_source = nullptr;
+	}
+	canvas_width = 0;
+	canvas_height = 0;
+}
+
+void RecastPreviewWidget::paintEvent(QPaintEvent *)
+{
+	if (!display)
+		CreateDisplay();
+}
+
+void RecastPreviewWidget::resizeEvent(QResizeEvent *)
+{
+	if (display) {
+		QSize size = this->size() * this->devicePixelRatioF();
+		obs_display_resize(display, size.width(), size.height());
+	}
+}
+
+void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
+{
+	auto *widget = static_cast<RecastPreviewWidget *>(param);
+	if (!widget->scene_source || widget->canvas_width <= 0 ||
+	    widget->canvas_height <= 0)
+		return;
+
+	int x, y;
+	float scale;
+	GetScaleAndCenterPos(widget->canvas_width, widget->canvas_height,
+			     (int)cx, (int)cy, x, y, scale);
+
+	int newCX = int(scale * float(widget->canvas_width));
+	int newCY = int(scale * float(widget->canvas_height));
+
+	gs_viewport_push();
+	gs_projection_push();
+	gs_set_viewport(x, y, newCX, newCY);
+	gs_ortho(0.0f, float(widget->canvas_width), 0.0f,
+		 float(widget->canvas_height), -100.0f, 100.0f);
+
+	obs_source_video_render(widget->scene_source);
+
+	gs_projection_pop();
+	gs_viewport_pop();
+}
 
 /* ====================================================================
  * RecastOutputCard
@@ -214,6 +363,22 @@ void RecastOutputCard::onToggleStream()
 	refreshStatus();
 }
 
+void RecastOutputCard::setSelected(bool sel)
+{
+	selected_ = sel;
+	if (sel) {
+		setStyleSheet("RecastOutputCard { border: 2px solid #4CAF50; }");
+	} else {
+		setStyleSheet("");
+	}
+}
+
+void RecastOutputCard::mousePressEvent(QMouseEvent *event)
+{
+	QGroupBox::mousePressEvent(event);
+	emit clicked(this);
+}
+
 /* ====================================================================
  * RecastDock
  * ==================================================================== */
@@ -244,6 +409,16 @@ RecastDock::RecastDock(QWidget *parent)
 	cards_layout = new QVBoxLayout;
 	cards_layout->setAlignment(Qt::AlignTop);
 	root_layout->addLayout(cards_layout);
+
+	/* Preview label */
+	preview_label = new QLabel(
+		obs_module_text("Recast.PreviewNone"));
+	preview_label->setStyleSheet("color: #999; padding: 4px 0;");
+	root_layout->addWidget(preview_label);
+
+	/* Live preview widget */
+	preview = new RecastPreviewWidget;
+	root_layout->addWidget(preview);
 
 	/* Stretch to push sync button to bottom */
 	root_layout->addStretch();
@@ -495,6 +670,8 @@ void RecastDock::addCard(recast_output_target_t *target)
 	auto *card = new RecastOutputCard(target, this);
 	connect(card, &RecastOutputCard::deleteRequested,
 		this, &RecastDock::onDeleteOutput);
+	connect(card, &RecastOutputCard::clicked,
+		this, &RecastDock::onCardClicked);
 	cards_layout->addWidget(card);
 	cards.push_back(card);
 	card->refreshStatus();
@@ -506,12 +683,73 @@ void RecastDock::removeCard(RecastOutputCard *card)
 	if (it == cards.end())
 		return;
 
+	/* If deleting the selected card, clear preview */
+	if (card == selected_card) {
+		selected_card = nullptr;
+		preview->ClearScene();
+		preview_label->setText(
+			obs_module_text("Recast.PreviewNone"));
+	}
+
 	recast_output_target_t *t = card->target();
 	cards.erase(it);
 	cards_layout->removeWidget(card);
 	card->deleteLater();
 
 	recast_output_target_destroy(t);
+}
+
+void RecastDock::onCardClicked(RecastOutputCard *card)
+{
+	selectCard(card);
+}
+
+void RecastDock::selectCard(RecastOutputCard *card)
+{
+	/* Deselect previous */
+	if (selected_card)
+		selected_card->setSelected(false);
+
+	selected_card = card;
+
+	if (!card) {
+		preview->ClearScene();
+		preview_label->setText(
+			obs_module_text("Recast.PreviewNone"));
+		return;
+	}
+
+	card->setSelected(true);
+
+	recast_output_target_t *t = card->target();
+
+	/* Resolve the scene source */
+	obs_source_t *scene = nullptr;
+	if (t->scene_name && *t->scene_name) {
+		scene = obs_get_source_by_name(t->scene_name);
+	}
+	if (!scene) {
+		scene = obs_frontend_get_current_scene();
+	}
+
+	/* Resolve canvas dimensions */
+	int w = t->width;
+	int h = t->height;
+	if (w <= 0 || h <= 0) {
+		struct obs_video_info ovi;
+		if (obs_get_video_info(&ovi)) {
+			w = ovi.base_width;
+			h = ovi.base_height;
+		}
+	}
+
+	preview->SetScene(scene, w, h);
+	preview_label->setText(
+		QString(obs_module_text("Recast.Preview"))
+			.arg(QString::fromUtf8(t->name)));
+
+	/* SetScene takes its own ref, release ours */
+	obs_source_release(scene);
 }
 
 /* ====================================================================
