@@ -22,7 +22,11 @@ extern "C" {
 #include "recast-config.h"
 }
 
+class RecastDockManager;
+
 /* ---- Add-Output Dialog ---- */
+
+class QCheckBox;
 
 class RecastAddDialog : public QDialog {
 	Q_OBJECT
@@ -36,6 +40,7 @@ public:
 	QString getScene() const;
 	int getWidth() const;
 	int getHeight() const;
+	bool getUsePrivateScenes() const;
 
 private:
 	QLineEdit *name_edit;
@@ -44,6 +49,7 @@ private:
 	QComboBox *scene_combo;
 	QSpinBox *width_spin;
 	QSpinBox *height_spin;
+	QCheckBox *private_scenes_check;
 
 	void populateScenes();
 };
@@ -124,6 +130,7 @@ private slots:
 	void onSyncServer();
 	void onRefreshTimer();
 	void onCardClicked(RecastOutputCard *card);
+	void onConfigChanged();
 
 private:
 	QVBoxLayout *cards_layout;
@@ -133,12 +140,15 @@ private:
 	QTimer *refresh_timer;
 	QNetworkAccessManager *net_mgr;
 	std::vector<RecastOutputCard *> cards;
+	RecastDockManager *dock_manager_;
 
 	void loadFromConfig();
 	void saveToConfig();
 	void addCard(recast_output_target_t *target);
 	void removeCard(RecastOutputCard *card);
 	void selectCard(RecastOutputCard *card);
+
+	friend class RecastDockManager;
 };
 
 #ifdef __cplusplus

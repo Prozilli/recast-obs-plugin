@@ -39,7 +39,13 @@ add_library(recast-obs-plugin MODULE
 	src/recast-output.c
 	src/recast-service.c
 	src/recast-config.c
+	src/recast-scene-model.c
 	src/recast-dock.cpp
+	src/recast-dock-manager.cpp
+	src/recast-scenes-dock.cpp
+	src/recast-sources-dock.cpp
+	src/recast-preview-dock.cpp
+	src/recast-settings-dock.cpp
 )
 
 target_include_directories(recast-obs-plugin PRIVATE src)

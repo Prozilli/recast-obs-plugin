@@ -1,5 +1,5 @@
 /*
- * recast-output.c — Multi-output target management for Recast.
+ * recast-output.c -- Multi-output target management for Recast.
  *
  * Each "target" wraps an instance of OBS's built-in "rtmp_output" paired with
  * a "recast_rtmp_service" for URL/key storage.  When a target uses a scene
@@ -36,23 +36,32 @@ static obs_encoder_t *get_main_audio_encoder(void)
 	return enc;
 }
 
-/* ---- Per-scene view setup (Phase 3) ---- */
-
-static bool setup_custom_view(recast_output_target_t *t)
+static char *generate_unique_id(const char *name)
 {
-	obs_source_t *scene_src =
-		obs_get_source_by_name(t->scene_name);
+	struct dstr id = {0};
+	dstr_printf(&id, "recast_out_%s_%llu", name,
+		    (unsigned long long)os_gettime_ns());
+	return id.array;
+}
+
+/* ---- Per-scene view setup ---- */
+
+/*
+ * setup_custom_view_with_source: creates a view + encoder pair using the
+ * provided scene source directly (instead of looking it up by name).
+ */
+static bool setup_custom_view_with_source(recast_output_target_t *t,
+					  obs_source_t *scene_src)
+{
 	if (!scene_src) {
 		blog(LOG_WARNING,
-		     "[Recast] Scene '%s' not found, using main",
-		     t->scene_name);
+		     "[Recast] No scene source for view '%s'", t->name);
 		return false;
 	}
 
 	/* Create a dedicated view rendering this scene */
 	t->view = obs_view_create();
 	obs_view_set_source(t->view, 0, scene_src);
-	obs_source_release(scene_src);
 
 	/* Set up a custom video output at the target resolution */
 	struct obs_video_info ovi;
@@ -105,6 +114,32 @@ static bool setup_custom_view(recast_output_target_t *t)
 	return true;
 }
 
+/*
+ * Legacy wrapper: resolves scene by name, then delegates.
+ */
+static bool setup_custom_view(recast_output_target_t *t)
+{
+	/* If using private scenes, use the active scene from the model */
+	if (t->use_private_scenes && t->scene_model) {
+		obs_source_t *src =
+			recast_scene_model_get_active_source(t->scene_model);
+		return setup_custom_view_with_source(t, src);
+	}
+
+	/* Legacy path: look up by name */
+	obs_source_t *scene_src = obs_get_source_by_name(t->scene_name);
+	if (!scene_src) {
+		blog(LOG_WARNING,
+		     "[Recast] Scene '%s' not found, using main",
+		     t->scene_name);
+		return false;
+	}
+
+	bool ok = setup_custom_view_with_source(t, scene_src);
+	obs_source_release(scene_src);
+	return ok;
+}
+
 static void teardown_custom_view(recast_output_target_t *t)
 {
 	if (t->video_encoder) {
@@ -112,6 +147,25 @@ static void teardown_custom_view(recast_output_target_t *t)
 		t->video_encoder = NULL;
 	}
 	t->audio_encoder = NULL; /* not owned by us */
+
+	if (t->view && t->video) {
+		obs_view_remove(t->view);
+		t->video = NULL;
+	}
+	if (t->view) {
+		obs_view_set_source(t->view, 0, NULL);
+		obs_view_destroy(t->view);
+		t->view = NULL;
+	}
+}
+
+/* ---- View-only setup for preview (no encoders) ---- */
+
+static void teardown_view_only(recast_output_target_t *t)
+{
+	/* Only tear down if there are no encoders (preview-only mode) */
+	if (t->video_encoder)
+		return;
 
 	if (t->view && t->video) {
 		obs_view_remove(t->view);
@@ -135,6 +189,7 @@ recast_output_target_t *recast_output_target_create(const char *name,
 	recast_output_target_t *t =
 		bzalloc(sizeof(recast_output_target_t));
 
+	t->id = generate_unique_id(name);
 	t->name = bstrdup(name);
 	t->url = bstrdup(url);
 	t->key = bstrdup(key);
@@ -143,6 +198,8 @@ recast_output_target_t *recast_output_target_create(const char *name,
 	t->auto_start = false;
 	t->width = width;
 	t->height = height;
+	t->use_private_scenes = false;
+	t->scene_model = NULL;
 
 	/* Create the RTMP service for this target */
 	obs_data_t *svc_settings = obs_data_create();
@@ -180,12 +237,19 @@ void recast_output_target_destroy(recast_output_target_t *t)
 		recast_output_target_stop(t);
 
 	teardown_custom_view(t);
+	teardown_view_only(t);
+
+	if (t->scene_model) {
+		recast_scene_model_destroy(t->scene_model);
+		t->scene_model = NULL;
+	}
 
 	if (t->output)
 		obs_output_release(t->output);
 	if (t->service)
 		obs_service_release(t->service);
 
+	bfree(t->id);
 	bfree(t->name);
 	bfree(t->url);
 	bfree(t->key);
@@ -202,21 +266,31 @@ bool recast_output_target_start(recast_output_target_t *t)
 
 	obs_output_set_service(t->output, t->service);
 
-	bool uses_custom_scene = t->scene_name && *t->scene_name;
-	bool uses_custom_resolution = t->width > 0 && t->height > 0;
+	/* Determine if we need a custom view */
+	bool needs_custom = false;
 
-	if (uses_custom_scene || uses_custom_resolution) {
-		/* Phase 3: per-scene rendering with optional custom resolution */
+	if (t->use_private_scenes && t->scene_model) {
+		/* Private scenes always need a custom view */
+		needs_custom = true;
+	} else {
+		bool uses_custom_scene = t->scene_name && *t->scene_name;
+		bool uses_custom_resolution = t->width > 0 && t->height > 0;
+		needs_custom = uses_custom_scene || uses_custom_resolution;
+	}
+
+	if (needs_custom) {
+		/* Tear down any preview-only view first */
+		teardown_view_only(t);
+
 		if (!setup_custom_view(t)) {
-			/* Fall back to main encoder */
-			uses_custom_scene = false;
+			needs_custom = false;
 		}
 	}
 
 	if (t->video_encoder) {
 		obs_output_set_video_encoder(t->output, t->video_encoder);
 	} else {
-		/* Share the main encoder — zero extra CPU */
+		/* Share the main encoder -- zero extra CPU */
 		obs_encoder_t *main_venc = get_main_video_encoder();
 		if (!main_venc) {
 			blog(LOG_ERROR,
@@ -274,9 +348,61 @@ uint64_t recast_output_target_elapsed_sec(const recast_output_target_t *t)
 	return (os_gettime_ns() - t->start_time_ns) / 1000000000ULL;
 }
 
+void recast_output_target_bind_active_scene(recast_output_target_t *t)
+{
+	if (!t || !t->scene_model || !t->view)
+		return;
+
+	obs_source_t *src =
+		recast_scene_model_get_active_source(t->scene_model);
+	if (src)
+		obs_view_set_source(t->view, 0, src);
+}
+
+bool recast_output_target_ensure_view(recast_output_target_t *t,
+				      obs_source_t *scene_src)
+{
+	if (!t || !scene_src)
+		return false;
+
+	/* Already have a view? Just update the source. */
+	if (t->view) {
+		obs_view_set_source(t->view, 0, scene_src);
+		return true;
+	}
+
+	/* Create a view without encoders (preview-only) */
+	t->view = obs_view_create();
+	obs_view_set_source(t->view, 0, scene_src);
+
+	struct obs_video_info ovi;
+	obs_get_video_info(&ovi);
+
+	int w = t->width > 0 ? t->width : (int)ovi.base_width;
+	int h = t->height > 0 ? t->height : (int)ovi.base_height;
+
+	struct obs_video_info custom_ovi = ovi;
+	custom_ovi.base_width = (uint32_t)w;
+	custom_ovi.base_height = (uint32_t)h;
+	custom_ovi.output_width = (uint32_t)w;
+	custom_ovi.output_height = (uint32_t)h;
+
+	t->video = obs_view_add2(t->view, &custom_ovi);
+	if (!t->video) {
+		blog(LOG_ERROR,
+		     "[Recast] Failed to create preview video for '%s'",
+		     t->name);
+		obs_view_destroy(t->view);
+		t->view = NULL;
+		return false;
+	}
+
+	return true;
+}
+
 void recast_output_register(void)
 {
-	/* No custom obs_output_info needed — we use the built-in rtmp_output.
+	/* No custom obs_output_info needed -- we use the built-in rtmp_output.
 	 * This function is a placeholder for future custom output registration
 	 * if protocol-level control is ever needed. */
 }

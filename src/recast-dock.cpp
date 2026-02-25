@@ -1,16 +1,19 @@
 /*
- * recast-dock.cpp — Qt dock widget UI for Recast multi-output.
+ * recast-dock.cpp -- Qt dock widget UI for Recast multi-output.
  *
  * Provides the "Recast Output" panel in OBS with:
  *   - Output cards (start/stop/delete per target)
- *   - "Add Output" dialog
+ *   - "Add Output" dialog (with independent scenes option)
  *   - "Sync with Recast Server" button
  *   - Periodic status refresh
+ *   - Per-output dock management via RecastDockManager
  */
 
 #include "recast-dock.h"
+#include "recast-dock-manager.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -72,6 +75,21 @@ RecastAddDialog::RecastAddDialog(QWidget *parent)
 	res_layout->addWidget(height_spin);
 	form->addRow(obs_module_text("Recast.Resolution"), res_layout);
 
+	/* Independent scenes checkbox */
+	private_scenes_check = new QCheckBox(
+		obs_module_text("Recast.UsePrivateScenes"));
+	private_scenes_check->setChecked(true);
+	private_scenes_check->setToolTip(
+		obs_module_text("Recast.UsePrivateScenes.Tip"));
+	form->addRow("", private_scenes_check);
+
+	/* When independent scenes is checked, disable legacy scene combo */
+	connect(private_scenes_check, &QCheckBox::toggled, this,
+		[this](bool checked) {
+			scene_combo->setEnabled(!checked);
+		});
+	scene_combo->setEnabled(false); /* default: checked */
+
 	auto *buttons =
 		new QDialogButtonBox(QDialogButtonBox::Ok |
 				     QDialogButtonBox::Cancel);
@@ -106,6 +124,11 @@ QString RecastAddDialog::getScene() const
 
 int RecastAddDialog::getWidth() const { return width_spin->value(); }
 int RecastAddDialog::getHeight() const { return height_spin->value(); }
+
+bool RecastAddDialog::getUsePrivateScenes() const
+{
+	return private_scenes_check->isChecked();
+}
 
 /* ====================================================================
  * RecastPreviewWidget
@@ -272,11 +295,15 @@ RecastOutputCard::RecastOutputCard(recast_output_target_t *target,
 	vbox->addWidget(new QLabel(masked_url));
 
 	/* Scene row */
-	QString scene_text =
-		(target->scene_name && *target->scene_name)
-			? QString("Scene: %1").arg(
-				  QString::fromUtf8(target->scene_name))
-			: QString("Scene: (main)");
+	QString scene_text;
+	if (target->use_private_scenes) {
+		scene_text = obs_module_text("Recast.IndependentScenes");
+	} else if (target->scene_name && *target->scene_name) {
+		scene_text = QString("Scene: %1").arg(
+			QString::fromUtf8(target->scene_name));
+	} else {
+		scene_text = QString("Scene: (main)");
+	}
 	vbox->addWidget(new QLabel(scene_text));
 
 	/* Resolution row (if custom) */
@@ -390,6 +417,11 @@ RecastDock::RecastDock(QWidget *parent)
 	setFeatures(QDockWidget::DockWidgetMovable |
 		    QDockWidget::DockWidgetFloatable);
 
+	/* Create dock manager for per-output docks */
+	dock_manager_ = new RecastDockManager(this);
+	connect(dock_manager_, &RecastDockManager::configChanged,
+		this, &RecastDock::onConfigChanged);
+
 	/* Scroll area for output cards */
 	auto *scroll = new QScrollArea;
 	scroll->setWidgetResizable(true);
@@ -410,13 +442,13 @@ RecastDock::RecastDock(QWidget *parent)
 	cards_layout->setAlignment(Qt::AlignTop);
 	root_layout->addLayout(cards_layout);
 
-	/* Preview label */
+	/* Preview label (for non-private-scenes outputs) */
 	preview_label = new QLabel(
 		obs_module_text("Recast.PreviewNone"));
 	preview_label->setStyleSheet("color: #999; padding: 4px 0;");
 	root_layout->addWidget(preview_label);
 
-	/* Live preview widget */
+	/* Live preview widget (for non-private-scenes outputs) */
 	preview = new RecastPreviewWidget;
 	root_layout->addWidget(preview);
 
@@ -449,6 +481,9 @@ RecastDock::RecastDock(QWidget *parent)
 RecastDock::~RecastDock()
 {
 	refresh_timer->stop();
+
+	/* Destroy all per-output docks */
+	dock_manager_->destroyAll();
 
 	/* Stop all active outputs and destroy targets */
 	for (auto *card : cards) {
@@ -483,6 +518,12 @@ void RecastDock::onAddOutput()
 		key.toUtf8().constData(),
 		dlg.getScene().toUtf8().constData(),
 		dlg.getWidth(), dlg.getHeight());
+
+	/* Set up independent scenes if requested */
+	target->use_private_scenes = dlg.getUsePrivateScenes();
+	if (target->use_private_scenes) {
+		target->scene_model = recast_scene_model_create();
+	}
 
 	addCard(target);
 	saveToConfig();
@@ -608,6 +649,11 @@ void RecastDock::onRefreshTimer()
 		card->refreshStatus();
 }
 
+void RecastDock::onConfigChanged()
+{
+	saveToConfig();
+}
+
 void RecastDock::loadFromConfig()
 {
 	obs_data_array_t *arr = recast_config_load();
@@ -630,6 +676,30 @@ void RecastDock::loadFromConfig()
 						    w, h);
 		target->enabled = obs_data_get_bool(item, "enabled");
 		target->auto_start = obs_data_get_bool(item, "autoStart");
+		target->use_private_scenes =
+			obs_data_get_bool(item, "usePrivateScenes");
+
+		/* Restore saved ID if present */
+		const char *saved_id = obs_data_get_string(item, "id");
+		if (saved_id && *saved_id) {
+			bfree(target->id);
+			target->id = bstrdup(saved_id);
+		}
+
+		/* Load scene model if present */
+		if (target->use_private_scenes) {
+			obs_data_t *sm_data =
+				obs_data_get_obj(item, "scene_model");
+			if (sm_data) {
+				target->scene_model =
+					recast_config_load_scene_model(
+						sm_data);
+				obs_data_release(sm_data);
+			}
+			if (!target->scene_model)
+				target->scene_model =
+					recast_scene_model_create();
+		}
 
 		addCard(target);
 
@@ -647,6 +717,7 @@ void RecastDock::saveToConfig()
 		recast_output_target_t *t = card->target();
 		obs_data_t *item = obs_data_create();
 
+		obs_data_set_string(item, "id", t->id);
 		obs_data_set_string(item, "name", t->name);
 		obs_data_set_string(item, "url", t->url);
 		obs_data_set_string(item, "key", t->key);
@@ -656,6 +727,20 @@ void RecastDock::saveToConfig()
 		obs_data_set_bool(item, "autoStart", t->auto_start);
 		obs_data_set_int(item, "width", t->width);
 		obs_data_set_int(item, "height", t->height);
+		obs_data_set_bool(item, "usePrivateScenes",
+				  t->use_private_scenes);
+
+		/* Save scene model if using private scenes */
+		if (t->use_private_scenes && t->scene_model) {
+			obs_data_t *sm_data =
+				recast_config_save_scene_model(
+					t->scene_model);
+			if (sm_data) {
+				obs_data_set_obj(item, "scene_model",
+						 sm_data);
+				obs_data_release(sm_data);
+			}
+		}
 
 		obs_data_array_push_back(arr, item);
 		obs_data_release(item);
@@ -675,6 +760,11 @@ void RecastDock::addCard(recast_output_target_t *target)
 	cards_layout->addWidget(card);
 	cards.push_back(card);
 	card->refreshStatus();
+
+	/* Create per-output docks if using independent scenes */
+	if (target->use_private_scenes) {
+		dock_manager_->createDocksForOutput(target);
+	}
 }
 
 void RecastDock::removeCard(RecastOutputCard *card)
@@ -692,6 +782,12 @@ void RecastDock::removeCard(RecastOutputCard *card)
 	}
 
 	recast_output_target_t *t = card->target();
+
+	/* Destroy per-output docks first */
+	if (t->use_private_scenes) {
+		dock_manager_->destroyDocksForOutput(t);
+	}
+
 	cards.erase(it);
 	cards_layout->removeWidget(card);
 	card->deleteLater();
@@ -723,7 +819,15 @@ void RecastDock::selectCard(RecastOutputCard *card)
 
 	recast_output_target_t *t = card->target();
 
-	/* Resolve the scene source */
+	/* If using private scenes, the preview is in the per-output dock */
+	if (t->use_private_scenes) {
+		preview->ClearScene();
+		preview_label->setText(
+			obs_module_text("Recast.PreviewInDock"));
+		return;
+	}
+
+	/* Legacy: resolve the scene source */
 	obs_source_t *scene = nullptr;
 	if (t->scene_name && *t->scene_name) {
 		scene = obs_get_source_by_name(t->scene_name);
@@ -753,7 +857,7 @@ void RecastDock::selectCard(RecastOutputCard *card)
 }
 
 /* ====================================================================
- * C interface — called from plugin-main.c
+ * C interface -- called from plugin-main.c
  * ==================================================================== */
 
 static RecastDock *dock_instance = nullptr;
