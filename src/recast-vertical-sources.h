@@ -1,7 +1,7 @@
 #pragma once
 
-#include <QDockWidget>
 #include <QPushButton>
+#include <QWidget>
 
 extern "C" {
 #include <obs.h>
@@ -12,11 +12,11 @@ class SourceTree;
 /*
  * RecastVerticalSourcesDock -- Always-present sources dock for vertical canvas.
  *
- * Wraps existing SourceTree with bottom toolbar [+] [-] [^] [v].
+ * Wraps existing SourceTree with bottom toolbar [+] [-] [gear] [^] [v].
  * Matches native OBS Sources panel look.
  */
 
-class RecastVerticalSourcesDock : public QDockWidget {
+class RecastVerticalSourcesDock : public QWidget {
 	Q_OBJECT
 
 public:
@@ -34,6 +34,7 @@ signals:
 private slots:
 	void onAddSource();
 	void onRemoveSource();
+	void onProperties();
 	void onMoveUp();
 	void onMoveDown();
 	void onContextMenu(const QPoint &pos);
@@ -43,6 +44,7 @@ private:
 	SourceTree *tree_;
 	QPushButton *add_btn_;
 	QPushButton *remove_btn_;
+	QPushButton *props_btn_;
 	QPushButton *up_btn_;
 	QPushButton *down_btn_;
 

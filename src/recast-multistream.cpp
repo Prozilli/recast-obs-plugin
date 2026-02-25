@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QStyle>
 
 extern "C" {
 #include <obs-module.h>
@@ -292,7 +293,8 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	setFrameShadow(QFrame::Raised);
 
 	auto *layout = new QHBoxLayout(this);
-	layout->setContentsMargins(4, 2, 4, 2);
+	layout->setContentsMargins(8, 6, 8, 6);
+	layout->setSpacing(8);
 
 	/* Platform icon */
 	platform_icon_label_ = new QLabel;
@@ -307,7 +309,7 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 
 	/* Name */
 	name_label_ = new QLabel(QString::fromUtf8(dest->name));
-	name_label_->setStyleSheet("font-weight: bold;");
+	name_label_->setStyleSheet("font-weight: bold; font-size: 13px;");
 	layout->addWidget(name_label_, 1);
 
 	/* Canvas indicator */
@@ -316,8 +318,8 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 			? obs_module_text("Recast.Multistream.CanvasVertical")
 			: obs_module_text("Recast.Multistream.CanvasMain"));
 	canvas_label_->setStyleSheet(
-		"background: #444; color: #fff; padding: 1px 4px; "
-		"border-radius: 3px; font-size: 10px;");
+		"background: #444; color: #fff; padding: 2px 6px; "
+		"border-radius: 3px; font-size: 11px;");
 	layout->addWidget(canvas_label_);
 
 	/* Auto checkbox */
@@ -335,27 +337,38 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 
 	/* Status */
 	status_label_ = new QLabel;
-	status_label_->setMinimumWidth(80);
+	status_label_->setMinimumWidth(60);
 	layout->addWidget(status_label_);
 
 	/* Start/Stop button */
 	toggle_btn_ = new QPushButton(obs_module_text("Recast.Start"));
-	toggle_btn_->setFixedWidth(60);
+	toggle_btn_->setFixedWidth(70);
+	toggle_btn_->setStyleSheet(
+		"QPushButton { background: #2e7d32; color: white; "
+		"border-radius: 3px; padding: 4px 8px; font-weight: bold; }"
+		"QPushButton:hover { background: #388e3c; }");
 	connect(toggle_btn_, &QPushButton::clicked,
 		this, &RecastDestinationRow::onToggleStream);
 	layout->addWidget(toggle_btn_);
 
-	/* Edit button */
-	edit_btn_ = new QPushButton("Edit");
-	edit_btn_->setFixedWidth(40);
+	/* Edit button (gear icon) */
+	edit_btn_ = new QPushButton;
+	edit_btn_->setIcon(edit_btn_->style()->standardIcon(
+		QStyle::SP_FileDialogDetailedView));
+	edit_btn_->setFlat(true);
+	edit_btn_->setFixedSize(24, 24);
+	edit_btn_->setToolTip(obs_module_text("Recast.Multistream.Edit"));
 	connect(edit_btn_, &QPushButton::clicked, this, [this]() {
 		emit editRequested(this);
 	});
 	layout->addWidget(edit_btn_);
 
-	/* Delete button */
-	delete_btn_ = new QPushButton("x");
-	delete_btn_->setFixedWidth(24);
+	/* Delete button (trash icon) */
+	delete_btn_ = new QPushButton;
+	delete_btn_->setIcon(delete_btn_->style()->standardIcon(
+		QStyle::SP_TrashIcon));
+	delete_btn_->setFlat(true);
+	delete_btn_->setFixedSize(24, 24);
 	delete_btn_->setToolTip(obs_module_text("Recast.DeleteTip"));
 	connect(delete_btn_, &QPushButton::clicked, this, [this]() {
 		emit deleteRequested(this);
@@ -388,11 +401,21 @@ void RecastDestinationRow::refreshStatus()
 		status_label_->setStyleSheet(
 			"color: #4CAF50; font-weight: bold;");
 		toggle_btn_->setText(obs_module_text("Recast.Stop"));
+		toggle_btn_->setStyleSheet(
+			"QPushButton { background: #c62828; color: white; "
+			"border-radius: 3px; padding: 4px 8px; "
+			"font-weight: bold; }"
+			"QPushButton:hover { background: #e53935; }");
 	} else {
 		status_label_->setText(
 			obs_module_text("Recast.Status.Stopped"));
 		status_label_->setStyleSheet("color: #999;");
 		toggle_btn_->setText(obs_module_text("Recast.Start"));
+		toggle_btn_->setStyleSheet(
+			"QPushButton { background: #2e7d32; color: white; "
+			"border-radius: 3px; padding: 4px 8px; "
+			"font-weight: bold; }"
+			"QPushButton:hover { background: #388e3c; }");
 	}
 }
 
@@ -419,14 +442,10 @@ void RecastDestinationRow::onToggleStream()
  * ==================================================================== */
 
 RecastMultistreamDock::RecastMultistreamDock(QWidget *parent)
-	: QDockWidget(obs_module_text("Recast.Multistream.DockTitle"),
-		      parent)
+	: QWidget(parent)
 {
-	setObjectName("RecastMultistreamDock");
-	setFeatures(QDockWidget::DockWidgetMovable |
-		    QDockWidget::DockWidgetFloatable |
-		    QDockWidget::DockWidgetClosable);
-	setTitleBarWidget(new QWidget());
+	auto *main_layout = new QVBoxLayout(this);
+	main_layout->setContentsMargins(0, 0, 0, 0);
 
 	auto *scroll = new QScrollArea;
 	scroll->setWidgetResizable(true);
@@ -461,7 +480,7 @@ RecastMultistreamDock::RecastMultistreamDock(QWidget *parent)
 	root_layout->addStretch();
 
 	scroll->setWidget(container);
-	setWidget(scroll);
+	main_layout->addWidget(scroll);
 
 	/* Network manager */
 	net_mgr_ = new QNetworkAccessManager(this);
@@ -639,40 +658,87 @@ void RecastMultistreamDock::onDeleteDestination(RecastDestinationRow *row)
 void RecastMultistreamDock::onSyncServer()
 {
 	char *token = recast_config_get_server_token();
-	if (!token || !*token) {
-		bfree(token);
 
-		QLineEdit *input = new QLineEdit;
-		input->setPlaceholderText("Recast API token");
+	/* Always show dialog so user can set/change server URL and token */
+	QDialog dlg(this);
+	dlg.setWindowTitle(obs_module_text("Recast.SyncServer"));
+	dlg.setMinimumWidth(450);
 
-		QDialog dlg(this);
-		dlg.setWindowTitle(obs_module_text("Recast.SyncServer"));
-		auto *layout = new QVBoxLayout(&dlg);
-		layout->addWidget(
-			new QLabel(obs_module_text("Recast.EnterToken")));
-		layout->addWidget(input);
-		auto *btns = new QDialogButtonBox(
-			QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-		connect(btns, &QDialogButtonBox::accepted,
-			&dlg, &QDialog::accept);
-		connect(btns, &QDialogButtonBox::rejected,
-			&dlg, &QDialog::reject);
-		layout->addWidget(btns);
+	auto *form = new QFormLayout;
 
-		if (dlg.exec() != QDialog::Accepted ||
-		    input->text().trimmed().isEmpty())
-			return;
+	auto *server_input = new QLineEdit;
+	server_input->setPlaceholderText(
+		"https://your-server.com/api/stream/status");
+	/* Load saved server URL from config if available */
+	char *config_path = recast_config_get_path();
+	if (config_path) {
+		obs_data_t *root =
+			obs_data_create_from_json_file(config_path);
+		if (root) {
+			const char *saved_url =
+				obs_data_get_string(root, "server_url");
+			if (saved_url && *saved_url)
+				server_input->setText(
+					QString::fromUtf8(saved_url));
+			obs_data_release(root);
+		}
+		bfree(config_path);
+	}
+	form->addRow("Server URL", server_input);
 
-		QString new_token = input->text().trimmed();
-		recast_config_set_server_token(
-			new_token.toUtf8().constData());
-		token = bstrdup(new_token.toUtf8().constData());
+	auto *token_input = new QLineEdit;
+	token_input->setPlaceholderText("API token");
+	token_input->setEchoMode(QLineEdit::Password);
+	if (token && *token)
+		token_input->setText(QString::fromUtf8(token));
+	bfree(token);
+	form->addRow(obs_module_text("Recast.Key"), token_input);
+
+	auto *btns = new QDialogButtonBox(
+		QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+	connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+	auto *layout = new QVBoxLayout(&dlg);
+	layout->addLayout(form);
+	layout->addWidget(btns);
+
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	QString server_url = server_input->text().trimmed();
+	QString token_str = token_input->text().trimmed();
+
+	if (server_url.isEmpty()) {
+		QMessageBox::warning(this,
+			obs_module_text("Recast.Error"),
+			"Server URL is required.");
+		return;
 	}
 
-	QString url = QString(
-		"https://api.recast.stream/api/stream/status?token=%1")
-		.arg(QString::fromUtf8(token));
-	bfree(token);
+	/* Save token and server URL */
+	recast_config_set_server_token(token_str.toUtf8().constData());
+
+	/* Save server URL to config */
+	config_path = recast_config_get_path();
+	if (config_path) {
+		obs_data_t *root =
+			obs_data_create_from_json_file(config_path);
+		if (!root)
+			root = obs_data_create();
+		obs_data_set_string(root, "server_url",
+			server_url.toUtf8().constData());
+		obs_data_save_json(root, config_path);
+		obs_data_release(root);
+		bfree(config_path);
+	}
+
+	/* Build full URL with token parameter */
+	QString url = server_url;
+	if (!token_str.isEmpty()) {
+		url += (url.contains('?') ? "&" : "?");
+		url += "token=" + token_str;
+	}
 
 	QNetworkReply *reply = net_mgr_->get(QNetworkRequest(QUrl(url)));
 	connect(reply, &QNetworkReply::finished, this, [this, reply]() {

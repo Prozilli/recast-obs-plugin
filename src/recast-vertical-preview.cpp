@@ -15,24 +15,13 @@ extern "C" {
 }
 
 RecastVerticalPreviewDock::RecastVerticalPreviewDock(QWidget *parent)
-	: QDockWidget(obs_module_text("Recast.Vertical.Preview"), parent)
+	: QWidget(parent)
 {
-	setObjectName("RecastVerticalPreviewDock");
-	setFeatures(QDockWidget::DockWidgetMovable |
-		    QDockWidget::DockWidgetFloatable |
-		    QDockWidget::DockWidgetClosable);
-	/* Hide our title bar; OBS frontend adds its own dock frame */
-	setTitleBarWidget(new QWidget());
-
-	auto *container = new QWidget;
-	auto *layout = new QVBoxLayout(container);
+	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(2, 2, 2, 2);
 
 	preview_ = new RecastPreviewWidget;
-	preview_->setStyleSheet("border: 1px solid #001c3f;");
 	layout->addWidget(preview_);
-
-	setWidget(container);
 
 	/* Get initial canvas size from vertical controller */
 	RecastVertical *v = RecastVertical::instance();

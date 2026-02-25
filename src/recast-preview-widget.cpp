@@ -16,6 +16,7 @@ extern "C" {
 #include <graphics/graphics.h>
 #include <graphics/matrix4.h>
 #include <graphics/vec2.h>
+#include <obs-frontend-api.h>
 }
 
 /* ---- Helpers ---- */
@@ -102,8 +103,8 @@ void RecastPreviewWidget::CreateDisplay()
 	info.window.display = obs_get_nix_platform_display();
 #endif
 
-	/* Prozilli navy (#001c3f) for letterbox area — ABGR format */
-	display = obs_display_create(&info, 0xFF3F1C00);
+	/* Dark gray surround matching OBS main preview — ABGR format */
+	display = obs_display_create(&info, 0xFF2D2D2D);
 	obs_display_add_draw_callback(display, DrawCallback, this);
 }
 
@@ -439,16 +440,51 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 	float dx = sx - (float)drag_start_mouse.x();
 	float dy = sy - (float)drag_start_mouse.y();
 
+	/* Snap threshold in scene coordinates */
+	float snap_dist = 10.0f;
+	float cw = (float)canvas_width;
+	float ch = (float)canvas_height;
+
 	if (drag_handle == HANDLE_BODY) {
 		/* Move */
+		float new_x = item_start_pos_x + dx;
+		float new_y = item_start_pos_y + dy;
+
+		/* Calculate item displayed size for edge snapping */
+		float disp_w = item_start_width * item_start_scale_x;
+		float disp_h = item_start_height * item_start_scale_y;
+
+		/* Snap edges and center to canvas */
+		/* Left edge → 0 */
+		if (std::fabs(new_x) < snap_dist)
+			new_x = 0.0f;
+		/* Right edge → canvas width */
+		if (std::fabs(new_x + disp_w - cw) < snap_dist)
+			new_x = cw - disp_w;
+		/* Top edge → 0 */
+		if (std::fabs(new_y) < snap_dist)
+			new_y = 0.0f;
+		/* Bottom edge → canvas height */
+		if (std::fabs(new_y + disp_h - ch) < snap_dist)
+			new_y = ch - disp_h;
+		/* Horizontal center → canvas center */
+		if (std::fabs(new_x + disp_w / 2.0f - cw / 2.0f) < snap_dist)
+			new_x = cw / 2.0f - disp_w / 2.0f;
+		/* Vertical center → canvas center */
+		if (std::fabs(new_y + disp_h / 2.0f - ch / 2.0f) < snap_dist)
+			new_y = ch / 2.0f - disp_h / 2.0f;
+
 		struct vec2 new_pos;
-		new_pos.x = item_start_pos_x + dx;
-		new_pos.y = item_start_pos_y + dy;
+		new_pos.x = new_x;
+		new_pos.y = new_y;
 		obs_sceneitem_set_pos(selected_item, &new_pos);
 
 	} else {
 		/* Resize via handles — aspect-ratio locked by default.
-		 * Hold Shift to resize freely without aspect lock. */
+		 * Hold Shift to resize freely without aspect lock.
+		 *
+		 * Aspect ratio preserves the DISPLAYED shape by using
+		 * scale_y/scale_x ratio, NOT source width/height. */
 		float new_pos_x = item_start_pos_x;
 		float new_pos_y = item_start_pos_y;
 		float new_sx = item_start_scale_x;
@@ -456,7 +492,14 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 
 		float orig_w = item_start_width * item_start_scale_x;
 		float orig_h = item_start_height * item_start_scale_y;
-		float aspect = (orig_h > 0.0f) ? (orig_w / orig_h) : 1.0f;
+
+		/* Ratio that preserves displayed aspect */
+		float sy_over_sx = (item_start_scale_x != 0.0f)
+			? (item_start_scale_y / item_start_scale_x)
+			: 1.0f;
+		float sx_over_sy = (item_start_scale_y != 0.0f)
+			? (item_start_scale_x / item_start_scale_y)
+			: 1.0f;
 
 		bool shift = (event->modifiers() & Qt::ShiftModifier);
 
@@ -466,25 +509,25 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 			if (shift) {
 				new_sy = (orig_h + dy) / item_start_height;
 			} else {
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			}
 			break;
 		case HANDLE_R:
 			new_sx = (orig_w + dx) / item_start_width;
 			if (!shift)
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			break;
 		case HANDLE_B:
 			new_sy = (orig_h + dy) / item_start_height;
 			if (!shift)
-				new_sx = new_sy * (item_start_height / item_start_width);
+				new_sx = new_sy * sx_over_sy;
 			break;
 		case HANDLE_TL: {
 			new_sx = (orig_w - dx) / item_start_width;
 			if (shift) {
 				new_sy = (orig_h - dy) / item_start_height;
 			} else {
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			}
 			float dw = item_start_width * (new_sx - item_start_scale_x);
 			float dh = item_start_height * (new_sy - item_start_scale_y);
@@ -495,7 +538,7 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 		case HANDLE_T:
 			new_sy = (orig_h - dy) / item_start_height;
 			if (!shift)
-				new_sx = new_sy * (item_start_height / item_start_width);
+				new_sx = new_sy * sx_over_sy;
 			new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y);
 			if (!shift)
 				new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x) * 0.5f;
@@ -503,7 +546,7 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 		case HANDLE_L:
 			new_sx = (orig_w - dx) / item_start_width;
 			if (!shift)
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x);
 			if (!shift)
 				new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y) * 0.5f;
@@ -513,7 +556,7 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 			if (shift) {
 				new_sy = (orig_h - dy) / item_start_height;
 			} else {
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			}
 			new_pos_y = item_start_pos_y - item_start_height * (new_sy - item_start_scale_y);
 			break;
@@ -523,7 +566,7 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 			if (shift) {
 				new_sy = (orig_h + dy) / item_start_height;
 			} else {
-				new_sy = new_sx * (item_start_width / item_start_height);
+				new_sy = new_sx * sy_over_sx;
 			}
 			new_pos_x = item_start_pos_x - item_start_width * (new_sx - item_start_scale_x);
 			break;
@@ -534,6 +577,25 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 		if (new_sx < 0.01f) new_sx = 0.01f;
 		if (new_sy < 0.01f) new_sy = 0.01f;
 
+		/* Snap resized edges to canvas edges/center */
+		float disp_w = item_start_width * new_sx;
+		float disp_h = item_start_height * new_sy;
+		float right = new_pos_x + disp_w;
+		float bottom = new_pos_y + disp_h;
+
+		/* Right edge → canvas width */
+		if (std::fabs(right - cw) < snap_dist) {
+			disp_w = cw - new_pos_x;
+			new_sx = disp_w / item_start_width;
+			if (!shift) new_sy = new_sx * sy_over_sx;
+		}
+		/* Bottom edge → canvas height */
+		if (std::fabs(bottom - ch) < snap_dist) {
+			disp_h = ch - new_pos_y;
+			new_sy = disp_h / item_start_height;
+			if (!shift) new_sx = new_sy * sx_over_sy;
+		}
+
 		struct vec2 pos_v = {new_pos_x, new_pos_y};
 		struct vec2 sc_v = {new_sx, new_sy};
 		obs_sceneitem_set_pos(selected_item, &pos_v);
@@ -541,6 +603,22 @@ void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 	}
 
 	emit itemTransformed();
+}
+
+void RecastPreviewWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+	if (!interactive_scene || event->button() != Qt::LeftButton) {
+		QWidget::mouseDoubleClickEvent(event);
+		return;
+	}
+
+	QPointF sp = WidgetToScene(event->pos());
+	obs_sceneitem_t *hit = HitTestItems((float)sp.x(), (float)sp.y());
+	if (hit) {
+		obs_source_t *src = obs_sceneitem_get_source(hit);
+		if (src)
+			obs_frontend_open_source_properties(src);
+	}
 }
 
 void RecastPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
@@ -689,6 +767,24 @@ void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
 	gs_set_viewport(x, y, newCX, newCY);
 	gs_ortho(0.0f, float(widget->canvas_width), 0.0f,
 		 float(widget->canvas_height), -100.0f, 100.0f);
+
+	/* Draw black canvas background so empty scenes show black
+	 * against the dark gray surround (matching OBS main preview) */
+	gs_effect_t *bg_solid = obs_get_base_effect(OBS_EFFECT_SOLID);
+	gs_eparam_t *bg_color =
+		gs_effect_get_param_by_name(bg_solid, "color");
+	struct vec4 black;
+	vec4_set(&black, 0.0f, 0.0f, 0.0f, 1.0f);
+	gs_effect_set_vec4(bg_color, &black);
+	while (gs_effect_loop(bg_solid, "Solid")) {
+		gs_render_start(true);
+		gs_vertex2f(0.0f, 0.0f);
+		gs_vertex2f((float)widget->canvas_width, 0.0f);
+		gs_vertex2f(0.0f, (float)widget->canvas_height);
+		gs_vertex2f((float)widget->canvas_width,
+			    (float)widget->canvas_height);
+		gs_render_stop(GS_TRISTRIP);
+	}
 
 	obs_source_video_render(src);
 

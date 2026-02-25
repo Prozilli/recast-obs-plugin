@@ -13,6 +13,7 @@
 #include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 extern "C" {
@@ -21,16 +22,9 @@ extern "C" {
 }
 
 RecastVerticalScenesDock::RecastVerticalScenesDock(QWidget *parent)
-	: QDockWidget(obs_module_text("Recast.Vertical.Scenes"), parent)
+	: QWidget(parent)
 {
-	setObjectName("RecastVerticalScenesDock");
-	setFeatures(QDockWidget::DockWidgetMovable |
-		    QDockWidget::DockWidgetFloatable |
-		    QDockWidget::DockWidgetClosable);
-	setTitleBarWidget(new QWidget());
-
-	auto *container = new QWidget;
-	auto *layout = new QVBoxLayout(container);
+	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(4, 4, 4, 4);
 
 	/* Scene list */
@@ -45,26 +39,24 @@ RecastVerticalScenesDock::RecastVerticalScenesDock(QWidget *parent)
 	/* Toolbar */
 	auto *toolbar = new QHBoxLayout;
 
-	add_btn_ = new QPushButton("+");
-	add_btn_->setFixedSize(28, 28);
+	add_btn_ = new QPushButton;
+	add_btn_->setProperty("themeID", "addIconSmall");
+	add_btn_->setIcon(add_btn_->style()->standardIcon(
+		QStyle::SP_FileDialogNewFolder));
+	add_btn_->setFlat(true);
+	add_btn_->setFixedSize(24, 24);
 	add_btn_->setToolTip(obs_module_text("Recast.Scenes.Add"));
-	add_btn_->setStyleSheet(
-		"QPushButton { font-size: 16px; font-weight: bold; "
-		"border: 1px solid #444; border-radius: 4px; "
-		"background: #001c3f; color: #fff; }"
-		"QPushButton:hover { background: #002a5f; }");
 	connect(add_btn_, &QPushButton::clicked,
 		this, &RecastVerticalScenesDock::onAddScene);
 	toolbar->addWidget(add_btn_);
 
-	remove_btn_ = new QPushButton(QString::fromUtf8("\xe2\x80\x93")); /* en-dash */
-	remove_btn_->setFixedSize(28, 28);
+	remove_btn_ = new QPushButton;
+	remove_btn_->setProperty("themeID", "removeIconSmall");
+	remove_btn_->setIcon(remove_btn_->style()->standardIcon(
+		QStyle::SP_TrashIcon));
+	remove_btn_->setFlat(true);
+	remove_btn_->setFixedSize(24, 24);
 	remove_btn_->setToolTip(obs_module_text("Recast.Scenes.Remove"));
-	remove_btn_->setStyleSheet(
-		"QPushButton { font-size: 16px; font-weight: bold; "
-		"border: 1px solid #444; border-radius: 4px; "
-		"background: #910000; color: #fff; }"
-		"QPushButton:hover { background: #b10000; }");
 	connect(remove_btn_, &QPushButton::clicked,
 		this, &RecastVerticalScenesDock::onRemoveScene);
 	toolbar->addWidget(remove_btn_);
@@ -72,8 +64,6 @@ RecastVerticalScenesDock::RecastVerticalScenesDock(QWidget *parent)
 	toolbar->addStretch();
 
 	layout->addLayout(toolbar);
-
-	setWidget(container);
 
 	refresh();
 }

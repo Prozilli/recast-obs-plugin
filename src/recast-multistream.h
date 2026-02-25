@@ -1,8 +1,8 @@
 #pragma once
 
-#include <QDockWidget>
 #include <QVBoxLayout>
 #include <QScrollArea>
+#include <QWidget>
 #include <QPushButton>
 #include <QLabel>
 #include <QComboBox>
@@ -108,7 +108,7 @@ private:
 
 /* ---- Multistream Dock ---- */
 
-class RecastMultistreamDock : public QDockWidget {
+class RecastMultistreamDock : public QWidget {
 	Q_OBJECT
 
 public:

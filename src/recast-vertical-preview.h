@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDockWidget>
+#include <QWidget>
 
 class RecastPreviewWidget;
 
@@ -10,7 +10,7 @@ class RecastPreviewWidget;
  * Wraps RecastPreviewWidget and connects to RecastVertical::activeSceneChanged.
  */
 
-class RecastVerticalPreviewDock : public QDockWidget {
+class RecastVerticalPreviewDock : public QWidget {
 	Q_OBJECT
 
 public:

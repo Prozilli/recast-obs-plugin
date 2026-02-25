@@ -11,18 +11,21 @@
 #include <QDrag>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 
 #include <algorithm>
 
 extern "C" {
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 }
 
-/* ---- Source type icon generation ---- */
+/* ---- Icon generation helpers ---- */
 
 static QIcon generate_type_icon(QChar letter, const QColor &bg)
 {
@@ -47,6 +50,68 @@ static QIcon generate_type_icon(QChar letter, const QColor &bg)
 	return QIcon(pm);
 }
 
+static QIcon generate_visibility_icon(bool visible)
+{
+	int sz = 16;
+	QPixmap pm(sz, sz);
+	pm.fill(Qt::transparent);
+
+	QPainter p(&pm);
+	p.setRenderHint(QPainter::Antialiasing, true);
+
+	QColor col = visible ? QColor(200, 200, 200) : QColor(90, 90, 90);
+	p.setPen(QPen(col, 1.5));
+
+	/* Eye outline (almond shape) */
+	QPainterPath eye;
+	eye.moveTo(1, 8);
+	eye.cubicTo(4, 3, 12, 3, 15, 8);
+	eye.cubicTo(12, 13, 4, 13, 1, 8);
+	p.drawPath(eye);
+
+	if (visible) {
+		/* Pupil */
+		p.setBrush(col);
+		p.setPen(Qt::NoPen);
+		p.drawEllipse(QPointF(8, 8), 2.5, 2.5);
+	} else {
+		/* Strike-through line */
+		p.setPen(QPen(col, 1.5));
+		p.drawLine(3, 13, 13, 3);
+	}
+
+	p.end();
+	return QIcon(pm);
+}
+
+static QIcon generate_lock_icon(bool locked)
+{
+	int sz = 16;
+	QPixmap pm(sz, sz);
+	pm.fill(Qt::transparent);
+
+	QPainter p(&pm);
+	p.setRenderHint(QPainter::Antialiasing, true);
+
+	QColor col = locked ? QColor(200, 200, 200) : QColor(90, 90, 90);
+	p.setPen(QPen(col, 1.5));
+
+	/* Lock body */
+	p.setBrush(locked ? col : Qt::transparent);
+	p.drawRoundedRect(3, 9, 10, 6, 1, 1);
+
+	/* Shackle arch */
+	p.setBrush(Qt::transparent);
+	if (locked) {
+		p.drawArc(4, 3, 8, 10, 0, 180 * 16);
+	} else {
+		p.drawArc(5, 1, 8, 10, 0, 180 * 16);
+	}
+
+	p.end();
+	return QIcon(pm);
+}
+
 /* ====================================================================
  * SourceTreeItem
  * ==================================================================== */
@@ -55,13 +120,13 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 	: QFrame(parent), item_(item)
 {
 	setFrameShape(QFrame::NoFrame);
-	setFixedHeight(28);
+	setFixedHeight(32);
 	setStyleSheet(
 		"SourceTreeItem { background: transparent; "
 		"border-bottom: 1px solid #2a2a2a; }");
 
 	auto *layout = new QHBoxLayout(this);
-	layout->setContentsMargins(4, 2, 4, 2);
+	layout->setContentsMargins(6, 2, 6, 2);
 	layout->setSpacing(6);
 
 	/* Type icon */
@@ -79,7 +144,7 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 	name_label_->setSizePolicy(QSizePolicy::Expanding,
 				   QSizePolicy::Preferred);
 	name_label_->setStyleSheet(
-		"QLabel { color: #ddd; font-size: 12px; }");
+		"QLabel { color: #ddd; font-size: 13px; }");
 	if (src) {
 		const char *name = obs_source_get_name(src);
 		name_label_->setText(
@@ -98,40 +163,36 @@ SourceTreeItem::SourceTreeItem(obs_sceneitem_t *item, QWidget *parent)
 		this, &SourceTreeItem::onRenameFinished);
 	layout->addWidget(name_edit_, 1);
 
-	/* Visibility button (eye icon) */
+	/* Visibility button (drawn eye icon) */
 	vis_btn_ = new QPushButton;
-	vis_btn_->setFixedSize(22, 22);
+	vis_btn_->setFixedSize(24, 24);
 	vis_btn_->setFlat(true);
 	vis_btn_->setCheckable(true);
 	vis_btn_->setChecked(obs_sceneitem_visible(item));
-	vis_btn_->setText(obs_sceneitem_visible(item)
-		? QString::fromUtf8("\xf0\x9f\x91\x81")   /* eye */
-		: QString::fromUtf8("\xe2\x80\x94"));       /* dash */
+	vis_btn_->setIcon(generate_visibility_icon(
+		obs_sceneitem_visible(item)));
+	vis_btn_->setIconSize(QSize(16, 16));
 	vis_btn_->setToolTip(
 		obs_module_text("Recast.SourceTree.Visibility"));
 	vis_btn_->setStyleSheet(
-		"QPushButton { font-size: 12px; padding: 0; border: none; }"
-		"QPushButton:checked { color: #ccc; }"
-		"QPushButton:!checked { color: #555; }");
+		"QPushButton { padding: 0; border: none; }");
 	connect(vis_btn_, &QPushButton::clicked,
 		this, &SourceTreeItem::onVisibilityClicked);
 	layout->addWidget(vis_btn_);
 
-	/* Lock button (padlock icon) */
+	/* Lock button (drawn padlock icon) */
 	lock_btn_ = new QPushButton;
-	lock_btn_->setFixedSize(22, 22);
+	lock_btn_->setFixedSize(24, 24);
 	lock_btn_->setFlat(true);
 	lock_btn_->setCheckable(true);
 	lock_btn_->setChecked(obs_sceneitem_locked(item));
-	lock_btn_->setText(obs_sceneitem_locked(item)
-		? QString::fromUtf8("\xf0\x9f\x94\x92")   /* locked */
-		: QString::fromUtf8("\xf0\x9f\x94\x93"));  /* unlocked */
+	lock_btn_->setIcon(generate_lock_icon(
+		obs_sceneitem_locked(item)));
+	lock_btn_->setIconSize(QSize(16, 16));
 	lock_btn_->setToolTip(
 		obs_module_text("Recast.SourceTree.Lock"));
 	lock_btn_->setStyleSheet(
-		"QPushButton { font-size: 12px; padding: 0; border: none; }"
-		"QPushButton:checked { color: #f44; }"
-		"QPushButton:!checked { color: #555; }");
+		"QPushButton { padding: 0; border: none; }");
 	connect(lock_btn_, &QPushButton::clicked,
 		this, &SourceTreeItem::onLockClicked);
 	layout->addWidget(lock_btn_);
@@ -164,15 +225,11 @@ void SourceTreeItem::update()
 
 	bool vis = obs_sceneitem_visible(item_);
 	vis_btn_->setChecked(vis);
-	vis_btn_->setText(vis
-		? QString::fromUtf8("\xf0\x9f\x91\x81")
-		: QString::fromUtf8("\xe2\x80\x94"));
+	vis_btn_->setIcon(generate_visibility_icon(vis));
 
 	bool locked = obs_sceneitem_locked(item_);
 	lock_btn_->setChecked(locked);
-	lock_btn_->setText(locked
-		? QString::fromUtf8("\xf0\x9f\x94\x92")
-		: QString::fromUtf8("\xf0\x9f\x94\x93"));
+	lock_btn_->setIcon(generate_lock_icon(locked));
 }
 
 QIcon SourceTreeItem::getSourceTypeIcon(obs_source_t *source)
@@ -214,10 +271,14 @@ QIcon SourceTreeItem::getSourceTypeIcon(obs_source_t *source)
 
 void SourceTreeItem::mouseDoubleClickEvent(QMouseEvent *event)
 {
-	if (event->button() == Qt::LeftButton)
-		startRename();
-	else
+	if (event->button() == Qt::LeftButton) {
+		/* Open source properties (matches OBS native behavior) */
+		obs_source_t *src = obs_sceneitem_get_source(item_);
+		if (src)
+			obs_frontend_open_source_properties(src);
+	} else {
 		QFrame::mouseDoubleClickEvent(event);
+	}
 }
 
 void SourceTreeItem::startRename()
@@ -241,9 +302,7 @@ void SourceTreeItem::onVisibilityClicked()
 {
 	bool visible = vis_btn_->isChecked();
 	obs_sceneitem_set_visible(item_, visible);
-	vis_btn_->setText(visible
-		? QString::fromUtf8("\xf0\x9f\x91\x81")
-		: QString::fromUtf8("\xe2\x80\x94"));
+	vis_btn_->setIcon(generate_visibility_icon(visible));
 	emit visibilityToggled(item_, visible);
 }
 
@@ -251,9 +310,7 @@ void SourceTreeItem::onLockClicked()
 {
 	bool locked = lock_btn_->isChecked();
 	obs_sceneitem_set_locked(item_, locked);
-	lock_btn_->setText(locked
-		? QString::fromUtf8("\xf0\x9f\x94\x92")
-		: QString::fromUtf8("\xf0\x9f\x94\x93"));
+	lock_btn_->setIcon(generate_lock_icon(locked));
 	emit lockToggled(item_, locked);
 }
 
@@ -347,12 +404,14 @@ QVariant SourceTreeModel::data(const QModelIndex &index, int role) const
 		return QVariant();
 
 	if (role == Qt::DisplayRole) {
-		obs_source_t *src =
-			obs_sceneitem_get_source(items_[index.row()]);
-		if (src) {
-			const char *name = obs_source_get_name(src);
-			return QString::fromUtf8(name ? name : "(unnamed)");
-		}
+		/* Return empty string — the SourceTreeItem widget handles
+		 * display. Returning text here causes the view to paint
+		 * default text UNDERNEATH the widget, causing overlap. */
+		return QString();
+	}
+
+	if (role == Qt::SizeHintRole) {
+		return QSize(0, 32);
 	}
 
 	return QVariant();
@@ -538,9 +597,19 @@ void SourceTree::keyPressEvent(QKeyEvent *event)
 	if (event->key() == Qt::Key_Delete) {
 		obs_sceneitem_t *item = selectedItem();
 		if (item) {
-			obs_sceneitem_remove(item);
-			refreshItems();
-			emit sourcesModified();
+			obs_source_t *src = obs_sceneitem_get_source(item);
+			const char *name = src
+				? obs_source_get_name(src) : "(unnamed)";
+			auto answer = QMessageBox::question(
+				this,
+				obs_module_text("Recast.Confirm"),
+				QString("Remove source '%1'?")
+					.arg(QString::fromUtf8(name)));
+			if (answer == QMessageBox::Yes) {
+				obs_sceneitem_remove(item);
+				refreshItems();
+				emit sourcesModified();
+			}
 		}
 		return;
 	}

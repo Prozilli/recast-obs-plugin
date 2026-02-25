@@ -20,6 +20,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QSpinBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -34,16 +35,9 @@ extern "C" {
 /* ---- Constructor / Destructor ---- */
 
 RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
-	: QDockWidget(obs_module_text("Recast.Vertical.Sources"), parent)
+	: QWidget(parent)
 {
-	setObjectName("RecastVerticalSourcesDock");
-	setFeatures(QDockWidget::DockWidgetMovable |
-		    QDockWidget::DockWidgetFloatable |
-		    QDockWidget::DockWidgetClosable);
-	setTitleBarWidget(new QWidget());
-
-	auto *container = new QWidget;
-	auto *layout = new QVBoxLayout(container);
+	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(4, 4, 4, 4);
 
 	/* Source tree */
@@ -60,50 +54,55 @@ RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
 	/* Toolbar */
 	auto *toolbar = new QHBoxLayout;
 
-	QString btn_style_add =
-		"QPushButton { font-size: 16px; font-weight: bold; "
-		"border: 1px solid #444; border-radius: 4px; "
-		"background: #001c3f; color: #fff; }"
-		"QPushButton:hover { background: #002a5f; }";
-	QString btn_style_remove =
-		"QPushButton { font-size: 16px; font-weight: bold; "
-		"border: 1px solid #444; border-radius: 4px; "
-		"background: #910000; color: #fff; }"
-		"QPushButton:hover { background: #b10000; }";
-	QString btn_style_arrow =
-		"QPushButton { font-size: 14px; "
-		"border: 1px solid #444; border-radius: 4px; "
-		"background: #2a2a2a; color: #ccc; }"
-		"QPushButton:hover { background: #3a3a3a; }";
-
-	add_btn_ = new QPushButton("+");
-	add_btn_->setFixedSize(28, 28);
+	add_btn_ = new QPushButton;
+	add_btn_->setProperty("themeID", "addIconSmall");
+	add_btn_->setIcon(add_btn_->style()->standardIcon(
+		QStyle::SP_FileDialogNewFolder));
+	add_btn_->setFlat(true);
+	add_btn_->setFixedSize(24, 24);
 	add_btn_->setToolTip(obs_module_text("Recast.Sources.Add"));
-	add_btn_->setStyleSheet(btn_style_add);
 	connect(add_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onAddSource);
 	toolbar->addWidget(add_btn_);
 
-	remove_btn_ = new QPushButton(QString::fromUtf8("\xe2\x80\x93"));
-	remove_btn_->setFixedSize(28, 28);
+	remove_btn_ = new QPushButton;
+	remove_btn_->setProperty("themeID", "removeIconSmall");
+	remove_btn_->setIcon(remove_btn_->style()->standardIcon(
+		QStyle::SP_TrashIcon));
+	remove_btn_->setFlat(true);
+	remove_btn_->setFixedSize(24, 24);
 	remove_btn_->setToolTip(obs_module_text("Recast.Sources.Remove"));
-	remove_btn_->setStyleSheet(btn_style_remove);
 	connect(remove_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onRemoveSource);
 	toolbar->addWidget(remove_btn_);
 
-	up_btn_ = new QPushButton(QString::fromUtf8("\xe2\x96\xb2")); /* triangle up */
-	up_btn_->setFixedSize(28, 28);
+	props_btn_ = new QPushButton;
+	props_btn_->setIcon(props_btn_->style()->standardIcon(
+		QStyle::SP_FileDialogDetailedView));
+	props_btn_->setFlat(true);
+	props_btn_->setFixedSize(24, 24);
+	props_btn_->setToolTip(
+		obs_module_text("Recast.Sources.Properties"));
+	connect(props_btn_, &QPushButton::clicked,
+		this, &RecastVerticalSourcesDock::onProperties);
+	toolbar->addWidget(props_btn_);
+
+	up_btn_ = new QPushButton;
+	up_btn_->setIcon(up_btn_->style()->standardIcon(
+		QStyle::SP_ArrowUp));
+	up_btn_->setFlat(true);
+	up_btn_->setFixedSize(24, 24);
 	up_btn_->setToolTip(obs_module_text("Recast.Sources.Up"));
-	up_btn_->setStyleSheet(btn_style_arrow);
 	connect(up_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onMoveUp);
 	toolbar->addWidget(up_btn_);
 
-	down_btn_ = new QPushButton(QString::fromUtf8("\xe2\x96\xbc")); /* triangle down */
-	down_btn_->setFixedSize(28, 28);
+	down_btn_ = new QPushButton;
+	down_btn_->setIcon(down_btn_->style()->standardIcon(
+		QStyle::SP_ArrowDown));
+	down_btn_->setFlat(true);
+	down_btn_->setFixedSize(24, 24);
 	down_btn_->setToolTip(obs_module_text("Recast.Sources.Down"));
-	down_btn_->setStyleSheet(btn_style_arrow);
 	connect(down_btn_, &QPushButton::clicked,
 		this, &RecastVerticalSourcesDock::onMoveDown);
 	toolbar->addWidget(down_btn_);
@@ -111,8 +110,6 @@ RecastVerticalSourcesDock::RecastVerticalSourcesDock(QWidget *parent)
 	toolbar->addStretch();
 
 	layout->addLayout(toolbar);
-
-	setWidget(container);
 
 	/* Show initial scene if available */
 	RecastVertical *v = RecastVertical::instance();
@@ -160,6 +157,11 @@ void RecastVerticalSourcesDock::buildAddSourceMenu(QMenu *menu)
 	auto add_source_cb = [](void *param, obs_source_t *src) -> bool {
 		QMenu *m = static_cast<QMenu *>(param);
 
+		/* Only show input sources — skip filters, transitions */
+		enum obs_source_type type = obs_source_get_type(src);
+		if (type != OBS_SOURCE_TYPE_INPUT)
+			return true;
+
 		const char *name = obs_source_get_name(src);
 		if (!name || !*name)
 			return true;
@@ -205,8 +207,15 @@ void RecastVerticalSourcesDock::buildAddSourceMenu(QMenu *menu)
 		if (!display || !*display)
 			continue;
 
-		/* Deduplicate by display name (e.g. Color v2/v3) */
+		/* Skip internal-use-only and non-video sources */
 		QString display_str = QString::fromUtf8(display);
+		if (display_str.contains("(internal",
+					  Qt::CaseInsensitive))
+			continue;
+
+		/* Skip sources that don't produce video */
+		if (!(caps & (OBS_SOURCE_VIDEO | OBS_SOURCE_ASYNC_VIDEO)))
+			continue;
 		if (seen_names.count(display_str))
 			continue;
 		seen_names.insert(display_str);
@@ -411,6 +420,16 @@ void RecastVerticalSourcesDock::createNewSource(const char *type_id,
 			obs_frontend_open_source_properties(lookup);
 			obs_source_release(lookup);
 		}
+	}
+}
+
+void RecastVerticalSourcesDock::onProperties()
+{
+	obs_sceneitem_t *si = tree_->selectedItem();
+	if (si) {
+		obs_source_t *src = obs_sceneitem_get_source(si);
+		if (src)
+			obs_frontend_open_source_properties(src);
 	}
 }
 

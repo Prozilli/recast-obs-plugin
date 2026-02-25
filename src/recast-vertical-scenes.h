@@ -1,8 +1,8 @@
 #pragma once
 
-#include <QDockWidget>
 #include <QListWidget>
 #include <QPushButton>
+#include <QWidget>
 
 /*
  * RecastVerticalScenesDock -- Always-present scenes dock for vertical canvas.
@@ -11,7 +11,7 @@
  * (Rename, Link to Main Scene, Remove). Matches native OBS Scenes panel look.
  */
 
-class RecastVerticalScenesDock : public QDockWidget {
+class RecastVerticalScenesDock : public QWidget {
 	Q_OBJECT
 
 public:
