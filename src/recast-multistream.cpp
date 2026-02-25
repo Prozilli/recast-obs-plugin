@@ -287,14 +287,19 @@ bool RecastDestinationDialog::getCanvasVertical() const
 
 RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 					   QWidget *parent)
-	: QFrame(parent), dest_(dest)
+	: QFrame(parent), dest_(dest), last_bytes_(0)
 {
 	setFrameShape(QFrame::StyledPanel);
 	setFrameShadow(QFrame::Raised);
 
-	auto *layout = new QHBoxLayout(this);
-	layout->setContentsMargins(8, 6, 8, 6);
-	layout->setSpacing(8);
+	/* Main card layout: two rows stacked vertically */
+	auto *card = new QVBoxLayout(this);
+	card->setContentsMargins(8, 6, 8, 6);
+	card->setSpacing(4);
+
+	/* ---- Top row: icon, name, canvas badge, auto, edit, delete ---- */
+	auto *top = new QHBoxLayout;
+	top->setSpacing(8);
 
 	/* Platform icon */
 	platform_icon_label_ = new QLabel;
@@ -305,14 +310,14 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 		QIcon icon = recast_platform_icon(platform_id);
 		platform_icon_label_->setPixmap(icon.pixmap(20, 20));
 	}
-	layout->addWidget(platform_icon_label_);
+	top->addWidget(platform_icon_label_);
 
-	/* Name */
+	/* Name (bold, stretch) */
 	name_label_ = new QLabel(QString::fromUtf8(dest->name));
 	name_label_->setStyleSheet("font-weight: bold; font-size: 13px;");
-	layout->addWidget(name_label_, 1);
+	top->addWidget(name_label_, 1);
 
-	/* Canvas indicator */
+	/* Canvas indicator badge */
 	canvas_label_ = new QLabel(
 		dest->canvas_vertical
 			? obs_module_text("Recast.Multistream.CanvasVertical")
@@ -320,7 +325,7 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	canvas_label_->setStyleSheet(
 		"background: #444; color: #fff; padding: 2px 6px; "
 		"border-radius: 3px; font-size: 11px;");
-	layout->addWidget(canvas_label_);
+	top->addWidget(canvas_label_);
 
 	/* Auto checkbox */
 	auto_check_ = new QCheckBox(obs_module_text("Recast.Auto"));
@@ -333,23 +338,7 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 			dest_->auto_stop = checked;
 			emit autoChanged(this);
 		});
-	layout->addWidget(auto_check_);
-
-	/* Status */
-	status_label_ = new QLabel;
-	status_label_->setMinimumWidth(60);
-	layout->addWidget(status_label_);
-
-	/* Start/Stop button */
-	toggle_btn_ = new QPushButton(obs_module_text("Recast.Start"));
-	toggle_btn_->setFixedWidth(70);
-	toggle_btn_->setStyleSheet(
-		"QPushButton { background: #2e7d32; color: white; "
-		"border-radius: 3px; padding: 4px 8px; font-weight: bold; }"
-		"QPushButton:hover { background: #388e3c; }");
-	connect(toggle_btn_, &QPushButton::clicked,
-		this, &RecastDestinationRow::onToggleStream);
-	layout->addWidget(toggle_btn_);
+	top->addWidget(auto_check_);
 
 	/* Edit button (gear icon) */
 	edit_btn_ = new QPushButton;
@@ -361,7 +350,7 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	connect(edit_btn_, &QPushButton::clicked, this, [this]() {
 		emit editRequested(this);
 	});
-	layout->addWidget(edit_btn_);
+	top->addWidget(edit_btn_);
 
 	/* Delete button (trash icon) */
 	delete_btn_ = new QPushButton;
@@ -373,7 +362,45 @@ RecastDestinationRow::RecastDestinationRow(recast_destination_t *dest,
 	connect(delete_btn_, &QPushButton::clicked, this, [this]() {
 		emit deleteRequested(this);
 	});
-	layout->addWidget(delete_btn_);
+	top->addWidget(delete_btn_);
+
+	/* ---- Bottom row: status, bitrate, dropped, spacer, toggle ---- */
+	auto *bottom = new QHBoxLayout;
+	bottom->setSpacing(12);
+
+	/* Status dot + elapsed time */
+	status_label_ = new QLabel;
+	status_label_->setTextFormat(Qt::RichText);
+	status_label_->setMinimumWidth(80);
+	bottom->addWidget(status_label_);
+
+	/* Bitrate */
+	bitrate_label_ = new QLabel;
+	bitrate_label_->setStyleSheet("color: #999; font-size: 12px;");
+	bitrate_label_->setVisible(false);
+	bottom->addWidget(bitrate_label_);
+
+	/* Dropped frames */
+	dropped_label_ = new QLabel;
+	dropped_label_->setStyleSheet("color: #999; font-size: 12px;");
+	dropped_label_->setVisible(false);
+	bottom->addWidget(dropped_label_);
+
+	bottom->addStretch();
+
+	/* Start/Stop button */
+	toggle_btn_ = new QPushButton(obs_module_text("Recast.Start"));
+	toggle_btn_->setFixedWidth(70);
+	toggle_btn_->setStyleSheet(
+		"QPushButton { background: #2e7d32; color: white; "
+		"border-radius: 3px; padding: 4px 8px; font-weight: bold; }"
+		"QPushButton:hover { background: #388e3c; }");
+	connect(toggle_btn_, &QPushButton::clicked,
+		this, &RecastDestinationRow::onToggleStream);
+	bottom->addWidget(toggle_btn_);
+
+	card->addLayout(top);
+	card->addLayout(bottom);
 
 	refreshStatus();
 }
@@ -397,7 +424,9 @@ void RecastDestinationRow::refreshStatus()
 		else
 			time_str = QString("%1m %2s").arg(m).arg(s);
 
-		status_label_->setText(time_str);
+		status_label_->setText(
+			QString("<span style='color:#4CAF50;'>"
+				"\xe2\x97\x8f</span> %1").arg(time_str));
 		status_label_->setStyleSheet(
 			"color: #4CAF50; font-weight: bold;");
 		toggle_btn_->setText(obs_module_text("Recast.Stop"));
@@ -406,9 +435,33 @@ void RecastDestinationRow::refreshStatus()
 			"border-radius: 3px; padding: 4px 8px; "
 			"font-weight: bold; }"
 			"QPushButton:hover { background: #e53935; }");
+
+		/* Bitrate: compute from byte delta over 1s interval */
+		if (dest_->output) {
+			uint64_t total =
+				obs_output_get_total_bytes(dest_->output);
+			uint64_t delta = total - last_bytes_;
+			last_bytes_ = total;
+			int kbps = (int)(delta * 8 / 1000);
+			bitrate_label_->setText(
+				QString("%1 kbps").arg(kbps));
+			bitrate_label_->setVisible(true);
+
+			/* Dropped frames */
+			int dropped = obs_output_get_frames_dropped(
+				dest_->output);
+			dropped_label_->setText(
+				QString("%1 dropped").arg(dropped));
+			dropped_label_->setStyleSheet(
+				dropped > 0
+					? "color: #ef5350; font-size: 12px;"
+					: "color: #999; font-size: 12px;");
+			dropped_label_->setVisible(true);
+		}
 	} else {
-		status_label_->setText(
-			obs_module_text("Recast.Status.Stopped"));
+		status_label_->setText(QString("<span style='color:#999;'>"
+			"\xe2\x97\x8f</span> %1")
+			.arg(obs_module_text("Recast.Status.Stopped")));
 		status_label_->setStyleSheet("color: #999;");
 		toggle_btn_->setText(obs_module_text("Recast.Start"));
 		toggle_btn_->setStyleSheet(
@@ -416,6 +469,11 @@ void RecastDestinationRow::refreshStatus()
 			"border-radius: 3px; padding: 4px 8px; "
 			"font-weight: bold; }"
 			"QPushButton:hover { background: #388e3c; }");
+
+		/* Hide health stats when stopped */
+		bitrate_label_->setVisible(false);
+		dropped_label_->setVisible(false);
+		last_bytes_ = 0;
 	}
 }
 
@@ -454,11 +512,46 @@ RecastMultistreamDock::RecastMultistreamDock(QWidget *parent)
 	auto *root_layout = new QVBoxLayout(container);
 	root_layout->setAlignment(Qt::AlignTop);
 
+	/* Empty state label */
+	empty_label_ = new QLabel(
+		"No destinations configured.\n"
+		"Click \"Add Destination\" to get started.");
+	empty_label_->setAlignment(Qt::AlignCenter);
+	empty_label_->setStyleSheet(
+		"color: #999; font-style: italic; padding: 24px;");
+	root_layout->addWidget(empty_label_);
+
 	/* Destination rows container */
 	rows_layout_ = new QVBoxLayout;
 	rows_layout_->setAlignment(Qt::AlignTop);
 	rows_layout_->setSpacing(2);
 	root_layout->addLayout(rows_layout_);
+
+	/* Start All / Stop All row */
+	auto *all_row = new QHBoxLayout;
+
+	start_all_btn_ = new QPushButton("Start All");
+	start_all_btn_->setStyleSheet(
+		"QPushButton { background: #2e7d32; color: white; "
+		"border-radius: 3px; padding: 4px 12px; font-weight: bold; }"
+		"QPushButton:hover { background: #388e3c; }"
+		"QPushButton:disabled { background: #555; color: #888; }");
+	connect(start_all_btn_, &QPushButton::clicked,
+		this, &RecastMultistreamDock::onStartAll);
+	all_row->addWidget(start_all_btn_);
+
+	stop_all_btn_ = new QPushButton("Stop All");
+	stop_all_btn_->setStyleSheet(
+		"QPushButton { background: #c62828; color: white; "
+		"border-radius: 3px; padding: 4px 12px; font-weight: bold; }"
+		"QPushButton:hover { background: #e53935; }"
+		"QPushButton:disabled { background: #555; color: #888; }");
+	connect(stop_all_btn_, &QPushButton::clicked,
+		this, &RecastMultistreamDock::onStopAll);
+	all_row->addWidget(stop_all_btn_);
+
+	all_row->addStretch();
+	root_layout->addLayout(all_row);
 
 	/* Buttons row */
 	auto *buttons_row = new QHBoxLayout;
@@ -481,6 +574,9 @@ RecastMultistreamDock::RecastMultistreamDock(QWidget *parent)
 
 	scroll->setWidget(container);
 	main_layout->addWidget(scroll);
+
+	/* Initial empty/button state */
+	updateButtonStates();
 
 	/* Network manager */
 	net_mgr_ = new QNetworkAccessManager(this);
@@ -805,6 +901,7 @@ void RecastMultistreamDock::onRefreshTimer()
 {
 	for (auto *row : rows_)
 		row->refreshStatus();
+	updateButtonStates();
 }
 
 void RecastMultistreamDock::addRow(recast_destination_t *dest)
@@ -818,6 +915,9 @@ void RecastMultistreamDock::addRow(recast_destination_t *dest)
 		this, [this](RecastDestinationRow *) { emit configChanged(); });
 	rows_layout_->addWidget(row);
 	rows_.push_back(row);
+
+	empty_label_->setVisible(false);
+	updateButtonStates();
 }
 
 void RecastMultistreamDock::removeRow(RecastDestinationRow *row)
@@ -831,6 +931,51 @@ void RecastMultistreamDock::removeRow(RecastDestinationRow *row)
 	rows_layout_->removeWidget(row);
 	row->deleteLater();
 	recast_destination_destroy(d);
+
+	empty_label_->setVisible(rows_.empty());
+	updateButtonStates();
+}
+
+void RecastMultistreamDock::onStartAll()
+{
+	for (auto *row : rows_) {
+		recast_destination_t *d = row->destination();
+		if (d && !d->active)
+			recast_destination_start(d);
+		row->refreshStatus();
+	}
+	updateButtonStates();
+}
+
+void RecastMultistreamDock::onStopAll()
+{
+	for (auto *row : rows_) {
+		recast_destination_t *d = row->destination();
+		if (d && d->active)
+			recast_destination_stop(d);
+		row->refreshStatus();
+	}
+	updateButtonStates();
+}
+
+void RecastMultistreamDock::updateButtonStates()
+{
+	bool any_active = false;
+	bool any_stopped = false;
+
+	for (auto *row : rows_) {
+		recast_destination_t *d = row->destination();
+		if (d && d->active)
+			any_active = true;
+		else
+			any_stopped = true;
+	}
+
+	bool has_rows = !rows_.empty();
+	start_all_btn_->setEnabled(has_rows && any_stopped);
+	stop_all_btn_->setEnabled(has_rows && any_active);
+	start_all_btn_->setVisible(has_rows);
+	stop_all_btn_->setVisible(has_rows);
 }
 
 void RecastMultistreamDock::onFrontendEvent(enum obs_frontend_event event,

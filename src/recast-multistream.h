@@ -100,10 +100,13 @@ private:
 	QLabel *status_label_;
 	QLabel *platform_icon_label_;
 	QLabel *canvas_label_;
+	QLabel *bitrate_label_;
+	QLabel *dropped_label_;
 	QPushButton *toggle_btn_;
 	QPushButton *edit_btn_;
 	QPushButton *delete_btn_;
 	QCheckBox *auto_check_;
+	uint64_t last_bytes_;
 };
 
 /* ---- Multistream Dock ---- */
@@ -128,15 +131,21 @@ private slots:
 	void onDeleteDestination(RecastDestinationRow *row);
 	void onSyncServer();
 	void onRefreshTimer();
+	void onStartAll();
+	void onStopAll();
 
 private:
 	QVBoxLayout *rows_layout_;
 	QTimer *refresh_timer_;
 	QNetworkAccessManager *net_mgr_;
 	std::vector<RecastDestinationRow *> rows_;
+	QPushButton *start_all_btn_;
+	QPushButton *stop_all_btn_;
+	QLabel *empty_label_;
 
 	void addRow(recast_destination_t *dest);
 	void removeRow(RecastDestinationRow *row);
+	void updateButtonStates();
 
 	/* Auto start/stop with main OBS stream */
 	void onMainStreamStarted();
