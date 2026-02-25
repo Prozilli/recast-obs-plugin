@@ -12,6 +12,7 @@ typedef struct recast_scene_entry {
 	char *name;
 	obs_scene_t *scene;         /* obs_scene_create_private() */
 	obs_source_t *scene_source; /* obs_scene_get_source(scene), not addref'd */
+	char *linked_main_scene;    /* NULL = no link, else main scene name */
 } recast_scene_entry_t;
 
 typedef struct recast_scene_model {
@@ -49,6 +50,16 @@ obs_source_t *recast_scene_model_get_active_source(
 /* Find a scene index by name. Returns -1 if not found. */
 int recast_scene_model_find(const recast_scene_model_t *model,
 			    const char *name);
+
+/* Link a private scene to a main scene name.
+ * When the main scene changes to this name, the private scene auto-activates.
+ * Pass NULL to unlink. */
+void recast_scene_model_link_scene(recast_scene_model_t *model, int idx,
+				   const char *main_scene_name);
+
+/* Find a scene linked to a given main scene name. Returns index or -1. */
+int recast_scene_model_find_linked(const recast_scene_model_t *model,
+				   const char *main_scene_name);
 
 #ifdef __cplusplus
 }

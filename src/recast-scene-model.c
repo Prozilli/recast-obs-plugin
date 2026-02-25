@@ -33,6 +33,8 @@ void recast_scene_model_destroy(recast_scene_model_t *model)
 
 		bfree(e->name);
 		e->name = NULL;
+		bfree(e->linked_main_scene);
+		e->linked_main_scene = NULL;
 	}
 
 	bfree(model);
@@ -79,6 +81,8 @@ bool recast_scene_model_remove_scene(recast_scene_model_t *model, int idx)
 	e->scene_source = NULL;
 	bfree(e->name);
 	e->name = NULL;
+	bfree(e->linked_main_scene);
+	e->linked_main_scene = NULL;
 
 	/* Shift remaining entries down */
 	for (int i = idx; i < model->scene_count - 1; i++)
@@ -154,6 +158,34 @@ int recast_scene_model_find(const recast_scene_model_t *model,
 	for (int i = 0; i < model->scene_count; i++) {
 		if (model->scenes[i].name &&
 		    strcmp(model->scenes[i].name, name) == 0)
+			return i;
+	}
+	return -1;
+}
+
+void recast_scene_model_link_scene(recast_scene_model_t *model, int idx,
+				   const char *main_scene_name)
+{
+	if (!model || idx < 0 || idx >= model->scene_count)
+		return;
+
+	recast_scene_entry_t *e = &model->scenes[idx];
+	bfree(e->linked_main_scene);
+	e->linked_main_scene = main_scene_name && *main_scene_name
+				       ? bstrdup(main_scene_name)
+				       : NULL;
+}
+
+int recast_scene_model_find_linked(const recast_scene_model_t *model,
+				   const char *main_scene_name)
+{
+	if (!model || !main_scene_name)
+		return -1;
+
+	for (int i = 0; i < model->scene_count; i++) {
+		if (model->scenes[i].linked_main_scene &&
+		    strcmp(model->scenes[i].linked_main_scene,
+			   main_scene_name) == 0)
 			return i;
 	}
 	return -1;

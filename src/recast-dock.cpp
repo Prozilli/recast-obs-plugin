@@ -11,6 +11,7 @@
 
 #include "recast-dock.h"
 #include "recast-dock-manager.h"
+#include "recast-platform-icons.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -25,11 +26,17 @@
 #include <QScrollArea>
 #include <QWindow>
 
+#include <cmath>
+
 extern "C" {
 #include <obs-frontend-api.h>
 #include <obs-module.h>
 #include <graphics/graphics.h>
+#include <graphics/matrix4.h>
+#include <graphics/vec2.h>
 #include <util/platform.h>
+#include <util/dstr.h>
+#include "recast-protocol.h"
 }
 
 /* ====================================================================
@@ -165,6 +172,9 @@ RecastPreviewWidget::RecastPreviewWidget(QWidget *parent)
 	setAttribute(Qt::WA_OpaquePaintEvent);
 	setAttribute(Qt::WA_NativeWindow);
 
+	setMouseTracking(true);
+	setFocusPolicy(Qt::ClickFocus);
+
 	setMinimumHeight(200);
 	setMaximumHeight(400);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -233,6 +243,454 @@ void RecastPreviewWidget::ClearScene()
 	}
 	canvas_width = 0;
 	canvas_height = 0;
+	selected_item = nullptr;
+	interactive_scene = nullptr;
+}
+
+void RecastPreviewWidget::SetInteractiveScene(obs_scene_t *scene)
+{
+	interactive_scene = scene;
+	selected_item = nullptr;
+	dragging = false;
+}
+
+void RecastPreviewWidget::ClearInteractiveScene()
+{
+	interactive_scene = nullptr;
+	selected_item = nullptr;
+	dragging = false;
+}
+
+void RecastPreviewWidget::SetSelectedItem(obs_sceneitem_t *item)
+{
+	selected_item = item;
+}
+
+/* ---- Coordinate conversion ---- */
+
+QPointF RecastPreviewWidget::WidgetToScene(QPoint pos)
+{
+	if (canvas_width <= 0 || canvas_height <= 0)
+		return QPointF(0, 0);
+
+	float dpr = (float)devicePixelRatioF();
+	int widgetCX = (int)(width() * dpr);
+	int widgetCY = (int)(height() * dpr);
+
+	int vx, vy;
+	float scale;
+	GetScaleAndCenterPos(canvas_width, canvas_height,
+			     widgetCX, widgetCY, vx, vy, scale);
+
+	if (scale <= 0.0f)
+		return QPointF(0, 0);
+
+	float scene_x = (pos.x() * dpr - vx) / scale;
+	float scene_y = (pos.y() * dpr - vy) / scale;
+	return QPointF(scene_x, scene_y);
+}
+
+/* ---- Item bounding rect (no rotation) ---- */
+
+void RecastPreviewWidget::GetItemRect(obs_sceneitem_t *item,
+				      float &rx, float &ry,
+				      float &rw, float &rh)
+{
+	obs_source_t *src = obs_sceneitem_get_source(item);
+	float cx = (float)obs_source_get_width(src);
+	float cy = (float)obs_source_get_height(src);
+
+	struct vec2 pos, sc;
+	obs_sceneitem_get_pos(item, &pos);
+	obs_sceneitem_get_scale(item, &sc);
+
+	struct obs_sceneitem_crop crop;
+	obs_sceneitem_get_crop(item, &crop);
+
+	float crop_cx = cx - (float)(crop.left + crop.right);
+	float crop_cy = cy - (float)(crop.top + crop.bottom);
+	if (crop_cx < 1.0f) crop_cx = 1.0f;
+	if (crop_cy < 1.0f) crop_cy = 1.0f;
+
+	rx = pos.x;
+	ry = pos.y;
+	rw = crop_cx * sc.x;
+	rh = crop_cy * sc.y;
+}
+
+/* ---- Hit testing ---- */
+
+struct hit_test_ctx {
+	float mx, my;
+	obs_sceneitem_t *result;
+};
+
+static bool hit_test_cb(obs_scene_t *, obs_sceneitem_t *item, void *param)
+{
+	auto *ctx = static_cast<struct hit_test_ctx *>(param);
+
+	if (!obs_sceneitem_visible(item))
+		return true;
+
+	obs_source_t *src = obs_sceneitem_get_source(item);
+	float cx = (float)obs_source_get_width(src);
+	float cy = (float)obs_source_get_height(src);
+	if (cx <= 0 || cy <= 0)
+		return true;
+
+	/* Use box transform + inverse for accurate hit test */
+	struct matrix4 box_transform;
+	obs_sceneitem_get_box_transform(item, &box_transform);
+
+	struct matrix4 inv;
+	matrix4_inv(&inv, &box_transform);
+
+	struct vec3 scene_pt;
+	vec3_set(&scene_pt, ctx->mx, ctx->my, 0.0f);
+
+	struct vec3 local_pt;
+	vec3_transform(&local_pt, &scene_pt, &inv);
+
+	if (local_pt.x >= 0.0f && local_pt.x <= cx &&
+	    local_pt.y >= 0.0f && local_pt.y <= cy) {
+		ctx->result = item;
+	}
+
+	return true; /* continue to find topmost */
+}
+
+obs_sceneitem_t *RecastPreviewWidget::HitTestItems(float scene_x,
+						    float scene_y)
+{
+	if (!interactive_scene)
+		return nullptr;
+
+	struct hit_test_ctx ctx;
+	ctx.mx = scene_x;
+	ctx.my = scene_y;
+	ctx.result = nullptr;
+
+	obs_scene_enum_items(interactive_scene, hit_test_cb, &ctx);
+	return ctx.result;
+}
+
+int RecastPreviewWidget::HitTestHandles(float scene_x, float scene_y)
+{
+	if (!selected_item)
+		return HANDLE_NONE;
+
+	float rx, ry, rw, rh;
+	GetItemRect(selected_item, rx, ry, rw, rh);
+
+	/* Handle size in scene coords — scale-independent 8px */
+	float dpr = (float)devicePixelRatioF();
+	int widgetCX = (int)(width() * dpr);
+	int widgetCY = (int)(height() * dpr);
+	int vx_unused, vy_unused;
+	float view_scale;
+	GetScaleAndCenterPos(canvas_width, canvas_height,
+			     widgetCX, widgetCY, vx_unused, vy_unused,
+			     view_scale);
+	float hr = (view_scale > 0.0f) ? (8.0f * dpr / view_scale) : 8.0f;
+
+	/* 8 handle positions */
+	struct { float x, y; } handles[8] = {
+		{rx,          ry},           /* TL */
+		{rx + rw / 2, ry},           /* T  */
+		{rx + rw,     ry},           /* TR */
+		{rx + rw,     ry + rh / 2},  /* R  */
+		{rx + rw,     ry + rh},      /* BR */
+		{rx + rw / 2, ry + rh},      /* B  */
+		{rx,          ry + rh},      /* BL */
+		{rx,          ry + rh / 2},  /* L  */
+	};
+
+	for (int i = 0; i < 8; i++) {
+		float dx = scene_x - handles[i].x;
+		float dy = scene_y - handles[i].y;
+		if (std::fabs(dx) <= hr && std::fabs(dy) <= hr)
+			return i;
+	}
+
+	/* Check body */
+	if (scene_x >= rx && scene_x <= rx + rw &&
+	    scene_y >= ry && scene_y <= ry + rh)
+		return HANDLE_BODY;
+
+	return HANDLE_NONE;
+}
+
+/* ---- Mouse events ---- */
+
+void RecastPreviewWidget::mousePressEvent(QMouseEvent *event)
+{
+	if (!interactive_scene || event->button() != Qt::LeftButton) {
+		QWidget::mousePressEvent(event);
+		return;
+	}
+
+	QPointF sp = WidgetToScene(event->pos());
+	float sx = (float)sp.x();
+	float sy = (float)sp.y();
+
+	/* First check if clicking on a handle of the selected item */
+	int handle = HitTestHandles(sx, sy);
+
+	if (handle != HANDLE_NONE && selected_item) {
+		/* Start dragging a handle or body */
+		dragging = true;
+		drag_handle = handle;
+		drag_start_mouse = sp;
+
+		struct vec2 pos, sc;
+		obs_sceneitem_get_pos(selected_item, &pos);
+		obs_sceneitem_get_scale(selected_item, &sc);
+		item_start_pos_x = pos.x;
+		item_start_pos_y = pos.y;
+		item_start_scale_x = sc.x;
+		item_start_scale_y = sc.y;
+
+		obs_source_t *src = obs_sceneitem_get_source(selected_item);
+		struct obs_sceneitem_crop crop;
+		obs_sceneitem_get_crop(selected_item, &crop);
+		item_start_width = ((float)obs_source_get_width(src) -
+				    (float)(crop.left + crop.right));
+		item_start_height = ((float)obs_source_get_height(src) -
+				     (float)(crop.top + crop.bottom));
+		if (item_start_width < 1.0f) item_start_width = 1.0f;
+		if (item_start_height < 1.0f) item_start_height = 1.0f;
+		return;
+	}
+
+	/* Hit test scene items */
+	obs_sceneitem_t *hit = HitTestItems(sx, sy);
+	selected_item = hit;
+	emit itemSelected(selected_item);
+
+	if (hit) {
+		dragging = true;
+		drag_handle = HANDLE_BODY;
+		drag_start_mouse = sp;
+
+		struct vec2 pos, sc;
+		obs_sceneitem_get_pos(hit, &pos);
+		obs_sceneitem_get_scale(hit, &sc);
+		item_start_pos_x = pos.x;
+		item_start_pos_y = pos.y;
+		item_start_scale_x = sc.x;
+		item_start_scale_y = sc.y;
+
+		obs_source_t *src = obs_sceneitem_get_source(hit);
+		struct obs_sceneitem_crop crop;
+		obs_sceneitem_get_crop(hit, &crop);
+		item_start_width = ((float)obs_source_get_width(src) -
+				    (float)(crop.left + crop.right));
+		item_start_height = ((float)obs_source_get_height(src) -
+				     (float)(crop.top + crop.bottom));
+		if (item_start_width < 1.0f) item_start_width = 1.0f;
+		if (item_start_height < 1.0f) item_start_height = 1.0f;
+	}
+}
+
+void RecastPreviewWidget::mouseMoveEvent(QMouseEvent *event)
+{
+	if (!interactive_scene) {
+		QWidget::mouseMoveEvent(event);
+		return;
+	}
+
+	QPointF sp = WidgetToScene(event->pos());
+	float sx = (float)sp.x();
+	float sy = (float)sp.y();
+
+	/* Update cursor based on handle hover */
+	if (!dragging && selected_item) {
+		int handle = HitTestHandles(sx, sy);
+		switch (handle) {
+		case HANDLE_TL: case HANDLE_BR:
+			setCursor(Qt::SizeFDiagCursor); break;
+		case HANDLE_TR: case HANDLE_BL:
+			setCursor(Qt::SizeBDiagCursor); break;
+		case HANDLE_T: case HANDLE_B:
+			setCursor(Qt::SizeVerCursor); break;
+		case HANDLE_L: case HANDLE_R:
+			setCursor(Qt::SizeHorCursor); break;
+		case HANDLE_BODY:
+			setCursor(Qt::SizeAllCursor); break;
+		default:
+			setCursor(Qt::ArrowCursor); break;
+		}
+	}
+
+	if (!dragging || !selected_item)
+		return;
+
+	float dx = sx - (float)drag_start_mouse.x();
+	float dy = sy - (float)drag_start_mouse.y();
+
+	if (drag_handle == HANDLE_BODY) {
+		/* Move */
+		struct vec2 new_pos;
+		new_pos.x = item_start_pos_x + dx;
+		new_pos.y = item_start_pos_y + dy;
+		obs_sceneitem_set_pos(selected_item, &new_pos);
+
+	} else {
+		/* Resize via handles */
+		float new_pos_x = item_start_pos_x;
+		float new_pos_y = item_start_pos_y;
+		float new_sx = item_start_scale_x;
+		float new_sy = item_start_scale_y;
+
+		float orig_w = item_start_width * item_start_scale_x;
+		float orig_h = item_start_height * item_start_scale_y;
+
+		switch (drag_handle) {
+		case HANDLE_BR:
+			new_sx = (orig_w + dx) / item_start_width;
+			new_sy = (orig_h + dy) / item_start_height;
+			break;
+		case HANDLE_R:
+			new_sx = (orig_w + dx) / item_start_width;
+			break;
+		case HANDLE_B:
+			new_sy = (orig_h + dy) / item_start_height;
+			break;
+		case HANDLE_TL:
+			new_pos_x = item_start_pos_x + dx;
+			new_pos_y = item_start_pos_y + dy;
+			new_sx = (orig_w - dx) / item_start_width;
+			new_sy = (orig_h - dy) / item_start_height;
+			break;
+		case HANDLE_T:
+			new_pos_y = item_start_pos_y + dy;
+			new_sy = (orig_h - dy) / item_start_height;
+			break;
+		case HANDLE_L:
+			new_pos_x = item_start_pos_x + dx;
+			new_sx = (orig_w - dx) / item_start_width;
+			break;
+		case HANDLE_TR:
+			new_pos_y = item_start_pos_y + dy;
+			new_sx = (orig_w + dx) / item_start_width;
+			new_sy = (orig_h - dy) / item_start_height;
+			break;
+		case HANDLE_BL:
+			new_pos_x = item_start_pos_x + dx;
+			new_sx = (orig_w - dx) / item_start_width;
+			new_sy = (orig_h + dy) / item_start_height;
+			break;
+		}
+
+		/* Clamp to minimum */
+		if (new_sx < 0.01f) new_sx = 0.01f;
+		if (new_sy < 0.01f) new_sy = 0.01f;
+
+		struct vec2 pos_v = {new_pos_x, new_pos_y};
+		struct vec2 sc_v = {new_sx, new_sy};
+		obs_sceneitem_set_pos(selected_item, &pos_v);
+		obs_sceneitem_set_scale(selected_item, &sc_v);
+	}
+
+	emit itemTransformed();
+}
+
+void RecastPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+	if (event->button() == Qt::LeftButton && dragging) {
+		dragging = false;
+		drag_handle = HANDLE_NONE;
+		if (selected_item)
+			emit itemTransformed();
+	}
+	QWidget::mouseReleaseEvent(event);
+}
+
+/* ---- Selection overlay drawing ---- */
+
+void RecastPreviewWidget::DrawSelectionOverlay(RecastPreviewWidget *widget)
+{
+	obs_sceneitem_t *item = widget->selected_item;
+	if (!item)
+		return;
+
+	float rx, ry, rw, rh;
+	widget->GetItemRect(item, rx, ry, rw, rh);
+
+	gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
+	gs_eparam_t *color_param =
+		gs_effect_get_param_by_name(solid, "color");
+
+	/* Selection rectangle: green */
+	struct vec4 green;
+	vec4_set(&green, 0.0f, 1.0f, 0.0f, 1.0f);
+	gs_effect_set_vec4(color_param, &green);
+
+	while (gs_effect_loop(solid, "Solid")) {
+		/* Draw bounding box outline */
+		gs_render_start(true);
+		gs_vertex2f(rx, ry);
+		gs_vertex2f(rx + rw, ry);
+		gs_vertex2f(rx + rw, ry + rh);
+		gs_vertex2f(rx, ry + rh);
+		gs_vertex2f(rx, ry);
+		gs_render_stop(GS_LINESTRIP);
+	}
+
+	/* Handle squares: white filled */
+	struct vec4 white;
+	vec4_set(&white, 1.0f, 1.0f, 1.0f, 1.0f);
+	gs_effect_set_vec4(color_param, &white);
+
+	float hr = 4.0f; /* handle half-size in scene coords */
+	/* Scale handle size based on canvas so they look reasonable */
+	if (widget->canvas_width > 0)
+		hr = (float)widget->canvas_width / 240.0f;
+	if (hr < 3.0f) hr = 3.0f;
+	if (hr > 12.0f) hr = 12.0f;
+
+	struct { float x, y; } handles[8] = {
+		{rx,          ry},
+		{rx + rw / 2, ry},
+		{rx + rw,     ry},
+		{rx + rw,     ry + rh / 2},
+		{rx + rw,     ry + rh},
+		{rx + rw / 2, ry + rh},
+		{rx,          ry + rh},
+		{rx,          ry + rh / 2},
+	};
+
+	while (gs_effect_loop(solid, "Solid")) {
+		for (int i = 0; i < 8; i++) {
+			float hx = handles[i].x;
+			float hy = handles[i].y;
+			gs_render_start(true);
+			gs_vertex2f(hx - hr, hy - hr);
+			gs_vertex2f(hx + hr, hy - hr);
+			gs_vertex2f(hx - hr, hy + hr);
+			gs_vertex2f(hx + hr, hy + hr);
+			gs_render_stop(GS_TRISTRIP);
+		}
+	}
+
+	/* Handle outlines: dark border */
+	struct vec4 dark;
+	vec4_set(&dark, 0.0f, 0.0f, 0.0f, 1.0f);
+	gs_effect_set_vec4(color_param, &dark);
+
+	while (gs_effect_loop(solid, "Solid")) {
+		for (int i = 0; i < 8; i++) {
+			float hx = handles[i].x;
+			float hy = handles[i].y;
+			gs_render_start(true);
+			gs_vertex2f(hx - hr, hy - hr);
+			gs_vertex2f(hx + hr, hy - hr);
+			gs_vertex2f(hx + hr, hy + hr);
+			gs_vertex2f(hx - hr, hy + hr);
+			gs_vertex2f(hx - hr, hy - hr);
+			gs_render_stop(GS_LINESTRIP);
+		}
+	}
 }
 
 void RecastPreviewWidget::paintEvent(QPaintEvent *)
@@ -272,6 +730,10 @@ void RecastPreviewWidget::DrawCallback(void *param, uint32_t cx, uint32_t cy)
 
 	obs_source_video_render(widget->scene_source);
 
+	/* Draw selection overlay if interactive */
+	if (widget->interactive_scene && widget->selected_item)
+		DrawSelectionOverlay(widget);
+
 	gs_projection_pop();
 	gs_viewport_pop();
 }
@@ -288,11 +750,36 @@ RecastOutputCard::RecastOutputCard(recast_output_target_t *target,
 
 	auto *vbox = new QVBoxLayout(this);
 
-	/* URL row (masked) */
+	/* Title row: platform icon + URL + protocol badge */
+	auto *title_row = new QHBoxLayout;
+
+	/* Platform icon */
+	QString platform_id = recast_detect_platform(
+		QString::fromUtf8(target->url));
+	platform_icon_label = new QLabel;
+	platform_icon_label->setFixedSize(20, 20);
+	if (!platform_id.isEmpty()) {
+		QIcon icon = recast_platform_icon(platform_id);
+		platform_icon_label->setPixmap(
+			icon.pixmap(20, 20));
+	}
+	title_row->addWidget(platform_icon_label);
+
+	/* URL (masked) */
 	QString masked_url = QString::fromUtf8(target->url);
 	if (masked_url.length() > 30)
 		masked_url = masked_url.left(27) + "...";
-	vbox->addWidget(new QLabel(masked_url));
+	title_row->addWidget(new QLabel(masked_url), 1);
+
+	/* Protocol badge */
+	protocol_label = new QLabel(
+		QString::fromUtf8(recast_protocol_name(target->protocol)));
+	protocol_label->setStyleSheet(
+		"background: #444; color: #fff; padding: 1px 4px; "
+		"border-radius: 3px; font-size: 10px;");
+	title_row->addWidget(protocol_label);
+
+	vbox->addLayout(title_row);
 
 	/* Scene row */
 	QString scene_text;
@@ -314,11 +801,39 @@ RecastOutputCard::RecastOutputCard(recast_output_target_t *target,
 				.arg(target->height)));
 	}
 
+	/* Encoding mode row */
+	QString enc_text;
+	if (target->advanced_encoder) {
+		enc_text = QString("Encoder: %1 @ %2 kbps")
+				   .arg(target->encoder_id
+						? QString::fromUtf8(
+							  target->encoder_id)
+						: "obs_x264")
+				   .arg(target->custom_bitrate > 0
+						? target->custom_bitrate
+						: 4000);
+	} else {
+		enc_text = "Encoder: Shared (zero overhead)";
+	}
+	vbox->addWidget(new QLabel(enc_text));
+
 	/* Status + buttons row */
 	auto *bottom = new QHBoxLayout;
 
 	status_label = new QLabel(obs_module_text("Recast.Status.Stopped"));
 	bottom->addWidget(status_label, 1);
+
+	/* Auto checkbox */
+	auto_check = new QCheckBox(obs_module_text("Recast.Auto"));
+	auto_check->setChecked(target->auto_start);
+	auto_check->setToolTip("Auto start/stop with main stream");
+	connect(auto_check, &QCheckBox::toggled, this,
+		[this](bool checked) {
+			target_->auto_start = checked;
+			target_->auto_stop = checked;
+			emit autoChanged(this);
+		});
+	bottom->addWidget(auto_check);
 
 	toggle_btn = new QPushButton(obs_module_text("Recast.Start"));
 	toggle_btn->setFixedWidth(60);
@@ -474,6 +989,9 @@ RecastDock::RecastDock(QWidget *parent)
 		this, &RecastDock::onRefreshTimer);
 	refresh_timer->start(1000);
 
+	/* Register for main stream start/stop events (auto start/stop) */
+	obs_frontend_add_event_callback(onFrontendEvent, this);
+
 	/* Load saved config */
 	loadFromConfig();
 }
@@ -481,6 +999,8 @@ RecastDock::RecastDock(QWidget *parent)
 RecastDock::~RecastDock()
 {
 	refresh_timer->stop();
+
+	obs_frontend_remove_event_callback(onFrontendEvent, this);
 
 	/* Destroy all per-output docks */
 	dock_manager_->destroyAll();
@@ -654,6 +1174,163 @@ void RecastDock::onConfigChanged()
 	saveToConfig();
 }
 
+void RecastDock::onFrontendEvent(enum obs_frontend_event event, void *data)
+{
+	RecastDock *dock = static_cast<RecastDock *>(data);
+	if (!dock)
+		return;
+
+	if (event == OBS_FRONTEND_EVENT_STREAMING_STARTED) {
+		dock->onMainStreamStarted();
+	} else if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPED) {
+		dock->onMainStreamStopped();
+	} else if (event == OBS_FRONTEND_EVENT_SCENE_CHANGED) {
+		dock->onMainSceneChanged();
+	}
+}
+
+void RecastDock::onMainStreamStarted()
+{
+	for (auto *card : cards) {
+		recast_output_target_t *t = card->target();
+		if (t && t->auto_start && !t->active) {
+			if (recast_output_target_start(t)) {
+				blog(LOG_INFO,
+				     "[Recast] Auto-started output '%s'",
+				     t->name);
+			}
+			card->refreshStatus();
+		}
+	}
+}
+
+void RecastDock::onMainStreamStopped()
+{
+	for (auto *card : cards) {
+		recast_output_target_t *t = card->target();
+		if (t && t->auto_stop && t->active) {
+			recast_output_target_stop(t);
+			blog(LOG_INFO,
+			     "[Recast] Auto-stopped output '%s'",
+			     t->name);
+			card->refreshStatus();
+		}
+	}
+}
+
+void RecastDock::onMainSceneChanged()
+{
+	/* Get current main scene name */
+	obs_source_t *current = obs_frontend_get_current_scene();
+	if (!current)
+		return;
+
+	const char *main_scene_name = obs_source_get_name(current);
+
+	/* For each output with scene linking, auto-switch */
+	for (auto *card : cards) {
+		recast_output_target_t *t = card->target();
+		if (!t || !t->use_private_scenes || !t->scene_model)
+			continue;
+
+		int linked_idx = recast_scene_model_find_linked(
+			t->scene_model, main_scene_name);
+		if (linked_idx >= 0 &&
+		    linked_idx != t->scene_model->active_scene_idx) {
+			recast_scene_model_set_active(t->scene_model,
+						      linked_idx);
+			recast_output_target_bind_active_scene(t);
+			blog(LOG_INFO,
+			     "[Recast] Scene linked: '%s' -> scene %d",
+			     t->name, linked_idx);
+		}
+	}
+
+	obs_source_release(current);
+}
+
+void RecastDock::registerHotkeys(recast_output_target_t *target)
+{
+	OutputHotkeys hk = {};
+
+	struct dstr start_name = {0};
+	struct dstr stop_name = {0};
+	struct dstr rec_start_name = {0};
+	struct dstr rec_stop_name = {0};
+
+	dstr_printf(&start_name, "Recast.StartStream.%s", target->name);
+	dstr_printf(&stop_name, "Recast.StopStream.%s", target->name);
+	dstr_printf(&rec_start_name, "Recast.StartRecord.%s", target->name);
+	dstr_printf(&rec_stop_name, "Recast.StopRecord.%s", target->name);
+
+	hk.start_stream = obs_hotkey_register_frontend(
+		start_name.array,
+		start_name.array,
+		[](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
+			if (!pressed)
+				return;
+			auto *t = static_cast<recast_output_target_t *>(data);
+			if (!t->active)
+				recast_output_target_start(t);
+		},
+		target);
+
+	hk.stop_stream = obs_hotkey_register_frontend(
+		stop_name.array,
+		stop_name.array,
+		[](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
+			if (!pressed)
+				return;
+			auto *t = static_cast<recast_output_target_t *>(data);
+			if (t->active)
+				recast_output_target_stop(t);
+		},
+		target);
+
+	hk.start_record = obs_hotkey_register_frontend(
+		rec_start_name.array,
+		rec_start_name.array,
+		[](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
+			if (!pressed)
+				return;
+			auto *t = static_cast<recast_output_target_t *>(data);
+			if (!t->rec_active)
+				recast_output_target_start_recording(t);
+		},
+		target);
+
+	hk.stop_record = obs_hotkey_register_frontend(
+		rec_stop_name.array,
+		rec_stop_name.array,
+		[](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
+			if (!pressed)
+				return;
+			auto *t = static_cast<recast_output_target_t *>(data);
+			if (t->rec_active)
+				recast_output_target_stop_recording(t);
+		},
+		target);
+
+	dstr_free(&start_name);
+	dstr_free(&stop_name);
+	dstr_free(&rec_start_name);
+	dstr_free(&rec_stop_name);
+
+	hotkeys_.push_back(hk);
+}
+
+void RecastDock::unregisterHotkeys(size_t index)
+{
+	if (index >= hotkeys_.size())
+		return;
+
+	OutputHotkeys &hk = hotkeys_[index];
+	obs_hotkey_unregister(hk.start_stream);
+	obs_hotkey_unregister(hk.stop_stream);
+	obs_hotkey_unregister(hk.start_record);
+	obs_hotkey_unregister(hk.stop_record);
+}
+
 void RecastDock::loadFromConfig()
 {
 	obs_data_array_t *arr = recast_config_load();
@@ -676,8 +1353,49 @@ void RecastDock::loadFromConfig()
 						    w, h);
 		target->enabled = obs_data_get_bool(item, "enabled");
 		target->auto_start = obs_data_get_bool(item, "autoStart");
+		target->auto_stop = obs_data_get_bool(item, "autoStop");
 		target->use_private_scenes =
 			obs_data_get_bool(item, "usePrivateScenes");
+
+		/* Encoding config */
+		target->advanced_encoder =
+			obs_data_get_bool(item, "advancedEncoder");
+		const char *enc_id =
+			obs_data_get_string(item, "encoderId");
+		if (enc_id && *enc_id) {
+			bfree(target->encoder_id);
+			target->encoder_id = bstrdup(enc_id);
+		}
+		target->custom_bitrate =
+			(int)obs_data_get_int(item, "customBitrate");
+		target->audio_track =
+			(int)obs_data_get_int(item, "audioTrack");
+
+		obs_data_t *enc_settings =
+			obs_data_get_obj(item, "encoderSettings");
+		if (enc_settings) {
+			if (target->encoder_settings)
+				obs_data_release(target->encoder_settings);
+			target->encoder_settings = enc_settings;
+		}
+
+		/* Recording config */
+		target->rec_enabled =
+			obs_data_get_bool(item, "recEnabled");
+		const char *rec_path =
+			obs_data_get_string(item, "recPath");
+		if (rec_path && *rec_path) {
+			bfree(target->rec_path);
+			target->rec_path = bstrdup(rec_path);
+		}
+		const char *rec_fmt =
+			obs_data_get_string(item, "recFormat");
+		if (rec_fmt && *rec_fmt) {
+			bfree(target->rec_format);
+			target->rec_format = bstrdup(rec_fmt);
+		}
+		target->rec_bitrate =
+			(int)obs_data_get_int(item, "recBitrate");
 
 		/* Restore saved ID if present */
 		const char *saved_id = obs_data_get_string(item, "id");
@@ -725,10 +1443,32 @@ void RecastDock::saveToConfig()
 				    t->scene_name ? t->scene_name : "");
 		obs_data_set_bool(item, "enabled", t->enabled);
 		obs_data_set_bool(item, "autoStart", t->auto_start);
+		obs_data_set_bool(item, "autoStop", t->auto_stop);
 		obs_data_set_int(item, "width", t->width);
 		obs_data_set_int(item, "height", t->height);
 		obs_data_set_bool(item, "usePrivateScenes",
 				  t->use_private_scenes);
+
+		/* Encoding config */
+		obs_data_set_bool(item, "advancedEncoder",
+				  t->advanced_encoder);
+		obs_data_set_string(item, "encoderId",
+				    t->encoder_id ? t->encoder_id : "");
+		obs_data_set_int(item, "customBitrate", t->custom_bitrate);
+		obs_data_set_int(item, "audioTrack", t->audio_track);
+
+		if (t->encoder_settings) {
+			obs_data_set_obj(item, "encoderSettings",
+					 t->encoder_settings);
+		}
+
+		/* Recording config */
+		obs_data_set_bool(item, "recEnabled", t->rec_enabled);
+		obs_data_set_string(item, "recPath",
+				    t->rec_path ? t->rec_path : "");
+		obs_data_set_string(item, "recFormat",
+				    t->rec_format ? t->rec_format : "mkv");
+		obs_data_set_int(item, "recBitrate", t->rec_bitrate);
 
 		/* Save scene model if using private scenes */
 		if (t->use_private_scenes && t->scene_model) {
@@ -757,9 +1497,14 @@ void RecastDock::addCard(recast_output_target_t *target)
 		this, &RecastDock::onDeleteOutput);
 	connect(card, &RecastOutputCard::clicked,
 		this, &RecastDock::onCardClicked);
+	connect(card, &RecastOutputCard::autoChanged,
+		this, [this](RecastOutputCard *) { saveToConfig(); });
 	cards_layout->addWidget(card);
 	cards.push_back(card);
 	card->refreshStatus();
+
+	/* Register hotkeys for this output */
+	registerHotkeys(target);
 
 	/* Create per-output docks if using independent scenes */
 	if (target->use_private_scenes) {
@@ -782,6 +1527,12 @@ void RecastDock::removeCard(RecastOutputCard *card)
 	}
 
 	recast_output_target_t *t = card->target();
+
+	/* Unregister hotkeys */
+	size_t card_index = (size_t)(it - cards.begin());
+	unregisterHotkeys(card_index);
+	if (card_index < hotkeys_.size())
+		hotkeys_.erase(hotkeys_.begin() + card_index);
 
 	/* Destroy per-output docks first */
 	if (t->use_private_scenes) {

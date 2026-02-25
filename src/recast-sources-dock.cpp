@@ -1,11 +1,13 @@
 /*
  * recast-sources-dock.cpp -- Per-output sources dock widget.
  *
- * Lists scene items for the currently active scene, with controls to
- * add existing/new sources, toggle visibility, reorder, and transform.
+ * Uses the custom SourceTree widget for rich source display with
+ * type icons, visibility eye, lock toggle, inline rename, and
+ * drag-and-drop reordering.
  */
 
 #include "recast-sources-dock.h"
+#include "recast-source-tree.h"
 
 #include <QAction>
 #include <QDialog>
@@ -19,42 +21,12 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <vector>
+
 extern "C" {
 #include <obs-module.h>
 #include <obs-frontend-api.h>
-}
-
-/* ---- Helpers ---- */
-
-struct enum_items_ctx {
-	QListWidget *list;
-};
-
-static bool enum_items_callback(obs_scene_t *scene, obs_sceneitem_t *item,
-				void *param)
-{
-	UNUSED_PARAMETER(scene);
-	struct enum_items_ctx *ctx = (struct enum_items_ctx *)param;
-
-	obs_source_t *src = obs_sceneitem_get_source(item);
-	if (!src)
-		return true;
-
-	const char *name = obs_source_get_name(src);
-	auto *list_item =
-		new QListWidgetItem(QString::fromUtf8(name ? name : "(unnamed)"));
-
-	list_item->setFlags(list_item->flags() | Qt::ItemIsUserCheckable);
-	list_item->setCheckState(obs_sceneitem_visible(item)
-					 ? Qt::Checked
-					 : Qt::Unchecked);
-
-	/* Store sceneitem pointer in user data */
-	list_item->setData(Qt::UserRole,
-			   QVariant::fromValue((void *)item));
-
-	ctx->list->addItem(list_item);
-	return true;
 }
 
 /* ---- Constructor / Destructor ---- */
@@ -78,13 +50,16 @@ RecastSourcesDock::RecastSourcesDock(recast_output_target_t *target,
 	auto *layout = new QVBoxLayout(container);
 	layout->setContentsMargins(4, 4, 4, 4);
 
-	/* Source list with checkboxes */
-	list_ = new QListWidget;
-	connect(list_, &QListWidget::itemChanged,
-		this, &RecastSourcesDock::onItemChanged);
-	connect(list_, &QListWidget::itemDoubleClicked,
-		this, &RecastSourcesDock::onItemDoubleClicked);
-	layout->addWidget(list_);
+	/* Source tree */
+	tree_ = new SourceTree;
+	tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(tree_, &SourceTree::itemSelected,
+		this, &RecastSourcesDock::itemSelected);
+	connect(tree_, &SourceTree::sourcesModified,
+		this, &RecastSourcesDock::sourcesModified);
+	connect(tree_, &QWidget::customContextMenuRequested,
+		this, &RecastSourcesDock::onContextMenu);
+	layout->addWidget(tree_);
 
 	/* Toolbar */
 	auto *toolbar = new QHBoxLayout;
@@ -120,7 +95,7 @@ RecastSourcesDock::RecastSourcesDock(recast_output_target_t *target,
 	if (target->use_private_scenes && target->scene_model) {
 		current_scene_ = recast_scene_model_get_active_scene(
 			target->scene_model);
-		refreshItems();
+		tree_->setScene(current_scene_);
 	}
 }
 
@@ -133,47 +108,29 @@ void RecastSourcesDock::setCurrentScene(obs_scene_t *scene,
 {
 	Q_UNUSED(source);
 	current_scene_ = scene;
-	refreshItems();
+	tree_->setScene(current_scene_);
 }
 
-/* ---- Private ---- */
-
-void RecastSourcesDock::refreshItems()
+void RecastSourcesDock::selectSceneItem(obs_sceneitem_t *item)
 {
-	list_->blockSignals(true);
-	list_->clear();
-
-	if (current_scene_) {
-		struct enum_items_ctx ctx;
-		ctx.list = list_;
-		obs_scene_enum_items(current_scene_, enum_items_callback,
-				     &ctx);
-	}
-
-	list_->blockSignals(false);
+	tree_->selectItem(item);
 }
 
-/* ---- Slots ---- */
+/* ---- Build full add-source menu (matching stock OBS) ---- */
 
-void RecastSourcesDock::onAddSource()
+struct source_type_entry {
+	QString id;
+	QString display_name;
+};
+
+void RecastSourcesDock::buildAddSourceMenu(QMenu *menu)
 {
-	if (!current_scene_)
-		return;
-
-	QMenu menu;
-
 	/* Section: Add Existing Source */
 	QMenu *existing_menu =
-		menu.addMenu(obs_module_text("Recast.Sources.AddExisting"));
+		menu->addMenu(obs_module_text("Recast.Sources.AddExisting"));
 
-	/* Enumerate all public OBS sources */
 	auto add_source_cb = [](void *param, obs_source_t *src) -> bool {
 		QMenu *m = static_cast<QMenu *>(param);
-
-		/* Only list input and scene sources */
-		uint32_t flags = obs_source_get_output_flags(src);
-		if (!(flags & OBS_SOURCE_VIDEO))
-			return true;
 
 		const char *name = obs_source_get_name(src);
 		if (!name || !*name)
@@ -194,42 +151,189 @@ void RecastSourcesDock::onAddSource()
 			if (src) {
 				obs_scene_add(current_scene_, src);
 				obs_source_release(src);
-				refreshItems();
+				tree_->refreshItems();
 				emit sourcesModified();
 			}
 		});
 
-	/* Section: Create New Source */
-	menu.addSeparator();
-	QMenu *new_menu =
-		menu.addMenu(obs_module_text("Recast.Sources.CreateNew"));
+	/* Separator */
+	menu->addSeparator();
 
-	struct {
-		const char *type_id;
-		const char *label;
-	} common_types[] = {
-		{"image_source", "Image"},
-		{"color_source_v3", "Color Source"},
-		{"text_gdiplus_v3", "Text (GDI+)"},
-		{"browser_source", "Browser"},
-	};
+	/* Section: All available input source types */
+	std::vector<source_type_entry> types;
 
-	for (auto &ct : common_types) {
-		QAction *action = new_menu->addAction(ct.label);
-		action->setData(QString::fromUtf8(ct.type_id));
+	const char *type_id;
+	for (size_t i = 0; obs_enum_input_types(i, &type_id); i++) {
+		if (!type_id || !*type_id)
+			continue;
+
+		const char *display = obs_source_get_display_name(type_id);
+		if (!display || !*display)
+			continue;
+
+		source_type_entry e;
+		e.id = QString::fromUtf8(type_id);
+		e.display_name = QString::fromUtf8(display);
+		types.push_back(e);
 	}
 
-	connect(new_menu, &QMenu::triggered, this, [this](QAction *action) {
-		QString type_id = action->data().toString();
-		createNewSource(type_id.toUtf8().constData(),
+	std::sort(types.begin(), types.end(),
+		  [](const source_type_entry &a, const source_type_entry &b) {
+			  return a.display_name.toLower() <
+				 b.display_name.toLower();
+		  });
+
+	for (auto &entry : types) {
+		QAction *action = menu->addAction(entry.display_name);
+		action->setData(entry.id);
+	}
+
+	connect(menu, &QMenu::triggered, this, [this](QAction *action) {
+		if (action->parent() != sender())
+			return;
+
+		QString type_id_str = action->data().toString();
+		if (type_id_str.isEmpty())
+			return;
+		createNewSource(type_id_str.toUtf8().constData(),
 				action->text().toUtf8().constData());
 	});
+}
 
+/* ---- Slots ---- */
+
+void RecastSourcesDock::onAddSource()
+{
+	if (!current_scene_)
+		return;
+
+	QMenu menu;
+	buildAddSourceMenu(&menu);
 	menu.exec(QCursor::pos());
 }
 
+void RecastSourcesDock::onContextMenu(const QPoint &pos)
+{
+	QMenu menu;
+
+	obs_sceneitem_t *si = tree_->selectedItem();
+
+	if (si) {
+		obs_source_t *src = obs_sceneitem_get_source(si);
+
+		/* Properties */
+		QAction *props_action = menu.addAction(
+			obs_module_text("Recast.Sources.Properties"));
+		connect(props_action, &QAction::triggered, this, [src]() {
+			obs_frontend_open_source_properties(src);
+		});
+
+		/* Filters */
+		QAction *filters_action = menu.addAction(
+			obs_module_text("Recast.Sources.Filters"));
+		connect(filters_action, &QAction::triggered, this, [src]() {
+			obs_frontend_open_source_filters(src);
+		});
+
+		menu.addSeparator();
+
+		/* Transform */
+		QAction *transform_action = menu.addAction(
+			obs_module_text("Recast.Sources.Transform"));
+		connect(transform_action, &QAction::triggered, this, [this, si]() {
+			showTransformDialog(si);
+		});
+
+		menu.addSeparator();
+
+		/* Visibility toggle */
+		bool visible = obs_sceneitem_visible(si);
+		QAction *vis_action = menu.addAction(
+			visible ? obs_module_text("Recast.Sources.Hide")
+				: obs_module_text("Recast.Sources.Show"));
+		connect(vis_action, &QAction::triggered, this, [this, si, visible]() {
+			obs_sceneitem_set_visible(si, !visible);
+			tree_->refreshItems();
+			emit sourcesModified();
+		});
+
+		menu.addSeparator();
+
+		/* Order */
+		QMenu *order_menu = menu.addMenu(
+			obs_module_text("Recast.Sources.Order"));
+
+		QAction *move_top = order_menu->addAction(
+			obs_module_text("Recast.Sources.MoveTop"));
+		connect(move_top, &QAction::triggered, this, [this, si]() {
+			obs_sceneitem_set_order(si, OBS_ORDER_MOVE_TOP);
+			tree_->refreshItems();
+			emit sourcesModified();
+		});
+
+		QAction *move_up = order_menu->addAction(
+			obs_module_text("Recast.Sources.MoveUp"));
+		connect(move_up, &QAction::triggered, this, [this]() {
+			onMoveUp();
+		});
+
+		QAction *move_down = order_menu->addAction(
+			obs_module_text("Recast.Sources.MoveDown"));
+		connect(move_down, &QAction::triggered, this, [this]() {
+			onMoveDown();
+		});
+
+		QAction *move_bottom = order_menu->addAction(
+			obs_module_text("Recast.Sources.MoveBottom"));
+		connect(move_bottom, &QAction::triggered, this, [this, si]() {
+			obs_sceneitem_set_order(si, OBS_ORDER_MOVE_BOTTOM);
+			tree_->refreshItems();
+			emit sourcesModified();
+		});
+
+		menu.addSeparator();
+
+		/* Rename */
+		QAction *rename_action = menu.addAction(
+			obs_module_text("Recast.Sources.RenameSource"));
+		connect(rename_action, &QAction::triggered, this, [this, src]() {
+			bool ok;
+			QString new_name = QInputDialog::getText(
+				this,
+				obs_module_text("Recast.Sources.RenameSource"),
+				obs_module_text("Recast.Sources.EnterName"),
+				QLineEdit::Normal,
+				QString::fromUtf8(obs_source_get_name(src)),
+				&ok);
+			if (ok && !new_name.trimmed().isEmpty()) {
+				obs_source_set_name(
+					src,
+					new_name.trimmed().toUtf8().constData());
+				tree_->refreshItems();
+				emit sourcesModified();
+			}
+		});
+
+		/* Remove */
+		QAction *remove_action = menu.addAction(
+			obs_module_text("Recast.Sources.Remove"));
+		connect(remove_action, &QAction::triggered, this, [this]() {
+			onRemoveSource();
+		});
+	}
+
+	menu.addSeparator();
+
+	/* Add Source submenu */
+	QMenu *add_menu = menu.addMenu(
+		obs_module_text("Recast.Sources.Add"));
+	buildAddSourceMenu(add_menu);
+
+	menu.exec(tree_->mapToGlobal(pos));
+}
+
 void RecastSourcesDock::createNewSource(const char *type_id,
-					const char *label)
+					const char *display_name)
 {
 	if (!current_scene_)
 		return;
@@ -238,7 +342,7 @@ void RecastSourcesDock::createNewSource(const char *type_id,
 	QString name = QInputDialog::getText(
 		this, obs_module_text("Recast.Sources.CreateNew"),
 		obs_module_text("Recast.Sources.EnterName"),
-		QLineEdit::Normal, QString::fromUtf8(label), &ok);
+		QLineEdit::Normal, QString::fromUtf8(display_name), &ok);
 
 	if (!ok || name.trimmed().isEmpty())
 		return;
@@ -249,8 +353,16 @@ void RecastSourcesDock::createNewSource(const char *type_id,
 	if (src) {
 		obs_scene_add(current_scene_, src);
 		obs_source_release(src);
-		refreshItems();
+		tree_->refreshItems();
 		emit sourcesModified();
+
+		/* Open properties for the new source */
+		obs_source_t *lookup = obs_get_source_by_name(
+			name.trimmed().toUtf8().constData());
+		if (lookup) {
+			obs_frontend_open_source_properties(lookup);
+			obs_source_release(lookup);
+		}
 	}
 }
 
@@ -259,17 +371,10 @@ void RecastSourcesDock::onRemoveSource()
 	if (!current_scene_)
 		return;
 
-	int row = list_->currentRow();
-	if (row < 0)
-		return;
-
-	QListWidgetItem *item = list_->item(row);
-	obs_sceneitem_t *si = static_cast<obs_sceneitem_t *>(
-		item->data(Qt::UserRole).value<void *>());
-
+	obs_sceneitem_t *si = tree_->selectedItem();
 	if (si) {
 		obs_sceneitem_remove(si);
-		refreshItems();
+		tree_->refreshItems();
 		emit sourcesModified();
 	}
 }
@@ -279,18 +384,10 @@ void RecastSourcesDock::onMoveUp()
 	if (!current_scene_)
 		return;
 
-	int row = list_->currentRow();
-	if (row <= 0)
-		return;
-
-	QListWidgetItem *item = list_->item(row);
-	obs_sceneitem_t *si = static_cast<obs_sceneitem_t *>(
-		item->data(Qt::UserRole).value<void *>());
-
+	obs_sceneitem_t *si = tree_->selectedItem();
 	if (si) {
-		obs_sceneitem_set_order_position(si, row - 1);
-		refreshItems();
-		list_->setCurrentRow(row - 1);
+		obs_sceneitem_set_order(si, OBS_ORDER_MOVE_UP);
+		tree_->refreshItems();
 		emit sourcesModified();
 	}
 }
@@ -300,47 +397,12 @@ void RecastSourcesDock::onMoveDown()
 	if (!current_scene_)
 		return;
 
-	int row = list_->currentRow();
-	if (row < 0 || row >= list_->count() - 1)
-		return;
-
-	QListWidgetItem *item = list_->item(row);
-	obs_sceneitem_t *si = static_cast<obs_sceneitem_t *>(
-		item->data(Qt::UserRole).value<void *>());
-
+	obs_sceneitem_t *si = tree_->selectedItem();
 	if (si) {
-		obs_sceneitem_set_order_position(si, row + 1);
-		refreshItems();
-		list_->setCurrentRow(row + 1);
+		obs_sceneitem_set_order(si, OBS_ORDER_MOVE_DOWN);
+		tree_->refreshItems();
 		emit sourcesModified();
 	}
-}
-
-void RecastSourcesDock::onItemChanged(QListWidgetItem *item)
-{
-	if (!item)
-		return;
-
-	obs_sceneitem_t *si = static_cast<obs_sceneitem_t *>(
-		item->data(Qt::UserRole).value<void *>());
-
-	if (si) {
-		bool visible = (item->checkState() == Qt::Checked);
-		obs_sceneitem_set_visible(si, visible);
-		emit sourcesModified();
-	}
-}
-
-void RecastSourcesDock::onItemDoubleClicked(QListWidgetItem *item)
-{
-	if (!item)
-		return;
-
-	obs_sceneitem_t *si = static_cast<obs_sceneitem_t *>(
-		item->data(Qt::UserRole).value<void *>());
-
-	if (si)
-		showTransformDialog(si);
 }
 
 void RecastSourcesDock::showTransformDialog(obs_sceneitem_t *item)

@@ -32,6 +32,7 @@ private slots:
 	void onRemoveScene();
 	void onRenameScene();
 	void onSceneSelected(int row);
+	void onContextMenu(const QPoint &pos);
 
 private:
 	recast_output_target_t *target_;

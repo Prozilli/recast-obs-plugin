@@ -64,12 +64,30 @@ void RecastDockManager::createDocksForOutput(recast_output_target_t *target)
 			dock_set->preview->updateScene(source);
 		});
 
+	/* Wire ScenesDock -> PreviewDock interactive scene */
+	connect(dock_set->scenes, &RecastScenesDock::activeSceneChanged,
+		dock_set->preview,
+		&RecastPreviewDock::updateInteractiveScene);
+
 	/* Wire signals: SettingsDock -> PreviewDock */
 	connect(dock_set->settings, &RecastSettingsDock::settingsChanged,
 		this, [dock_set](recast_output_target_t *t) {
 			dock_set->preview->updateResolution(t->width,
 							    t->height);
 		});
+
+	/* Bidirectional preview <-> sources item selection */
+	RecastPreviewWidget *pw = dock_set->preview->previewWidget();
+
+	connect(pw, &RecastPreviewWidget::itemSelected,
+		dock_set->sources, &RecastSourcesDock::selectSceneItem);
+
+	connect(dock_set->sources, &RecastSourcesDock::itemSelected,
+		pw, &RecastPreviewWidget::SetSelectedItem);
+
+	/* Preview transform changes -> config save */
+	connect(pw, &RecastPreviewWidget::itemTransformed,
+		this, &RecastDockManager::configChanged);
 
 	/* Wire all modification signals -> config save */
 	connect(dock_set->scenes, &RecastScenesDock::scenesModified,

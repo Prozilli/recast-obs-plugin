@@ -1,18 +1,19 @@
 /*
  * recast-settings-dock.cpp -- Per-output settings dock widget.
  *
- * Provides editable fields for the output's name, RTMP URL, stream key,
- * resolution, and bitrate.
+ * Shows a summary of current settings and a button to open the
+ * full RecastConfigDialog.
  */
 
 #include "recast-settings-dock.h"
+#include "recast-config-dialog.h"
 
-#include <QFormLayout>
 #include <QVBoxLayout>
 
 extern "C" {
 #include <obs-module.h>
 #include <util/platform.h>
+#include "recast-protocol.h"
 }
 
 RecastSettingsDock::RecastSettingsDock(recast_output_target_t *target,
@@ -34,119 +35,107 @@ RecastSettingsDock::RecastSettingsDock(recast_output_target_t *target,
 	auto *layout = new QVBoxLayout(container);
 	layout->setContentsMargins(4, 4, 4, 4);
 
-	auto *form = new QFormLayout;
+	/* Summary label */
+	summary_label_ = new QLabel;
+	summary_label_->setWordWrap(true);
+	summary_label_->setStyleSheet("padding: 4px;");
+	layout->addWidget(summary_label_);
 
-	/* Name */
-	name_edit_ = new QLineEdit;
-	form->addRow(obs_module_text("Recast.Name"), name_edit_);
-
-	/* RTMP URL */
-	url_edit_ = new QLineEdit;
-	url_edit_->setPlaceholderText("rtmp://...");
-	form->addRow(obs_module_text("Recast.URL"), url_edit_);
-
-	/* Stream Key */
-	key_edit_ = new QLineEdit;
-	key_edit_->setEchoMode(QLineEdit::Password);
-	form->addRow(obs_module_text("Recast.Key"), key_edit_);
-
-	/* Resolution */
-	width_spin_ = new QSpinBox;
-	width_spin_->setRange(0, 7680);
-	width_spin_->setSpecialValueText(obs_module_text("Recast.Auto"));
-	form->addRow(obs_module_text("Recast.Settings.Width"), width_spin_);
-
-	height_spin_ = new QSpinBox;
-	height_spin_->setRange(0, 7680);
-	height_spin_->setSpecialValueText(obs_module_text("Recast.Auto"));
-	form->addRow(obs_module_text("Recast.Settings.Height"), height_spin_);
-
-	/* Bitrate */
-	bitrate_spin_ = new QSpinBox;
-	bitrate_spin_->setRange(500, 50000);
-	bitrate_spin_->setSuffix(" kbps");
-	bitrate_spin_->setValue(4000);
-	form->addRow(obs_module_text("Recast.Settings.Bitrate"),
-		     bitrate_spin_);
-
-	layout->addLayout(form);
-
-	/* Apply button */
-	auto *apply_btn =
-		new QPushButton(obs_module_text("Recast.Settings.Apply"));
-	connect(apply_btn, &QPushButton::clicked,
-		this, &RecastSettingsDock::onApply);
-	layout->addWidget(apply_btn);
+	/* Settings button */
+	auto *settings_btn = new QPushButton(
+		obs_module_text("Recast.Config.Title") +
+		QString("..."));
+	connect(settings_btn, &QPushButton::clicked,
+		this, &RecastSettingsDock::onOpenSettings);
+	layout->addWidget(settings_btn);
 
 	layout->addStretch();
 
 	setWidget(container);
 
-	populateFromTarget();
+	updateSummary();
 }
 
 RecastSettingsDock::~RecastSettingsDock() {}
 
 void RecastSettingsDock::populateFromTarget()
 {
-	if (!target_)
-		return;
-
-	name_edit_->setText(QString::fromUtf8(target_->name));
-	url_edit_->setText(QString::fromUtf8(target_->url));
-	key_edit_->setText(QString::fromUtf8(target_->key));
-	width_spin_->setValue(target_->width);
-	height_spin_->setValue(target_->height);
+	updateSummary();
 }
 
-void RecastSettingsDock::onApply()
+void RecastSettingsDock::updateSummary()
 {
-	if (!target_)
+	if (!target_) {
+		summary_label_->setText("No target");
 		return;
-
-	/* Update name */
-	QString new_name = name_edit_->text().trimmed();
-	if (!new_name.isEmpty()) {
-		bfree(target_->name);
-		target_->name = bstrdup(new_name.toUtf8().constData());
 	}
 
-	/* Update URL */
-	QString new_url = url_edit_->text().trimmed();
-	bfree(target_->url);
-	target_->url = bstrdup(new_url.toUtf8().constData());
+	QString summary;
 
-	/* Update key */
-	QString new_key = key_edit_->text().trimmed();
-	bfree(target_->key);
-	target_->key = bstrdup(new_key.toUtf8().constData());
+	/* Protocol */
+	summary += QString("Protocol: %1\n")
+			   .arg(QString::fromUtf8(
+				   recast_protocol_name(target_->protocol)));
 
-	/* Update resolution */
-	bool resolution_changed =
-		(target_->width != width_spin_->value()) ||
-		(target_->height != height_spin_->value());
-
-	target_->width = width_spin_->value();
-	target_->height = height_spin_->value();
-
-	/* Update service settings */
-	if (target_->service) {
-		obs_data_t *svc_settings = obs_data_create();
-		obs_data_set_string(svc_settings, "url",
-				    target_->url);
-		obs_data_set_string(svc_settings, "key",
-				    target_->key);
-		obs_service_update(target_->service, svc_settings);
-		obs_data_release(svc_settings);
+	/* Encoder info */
+	if (target_->advanced_encoder) {
+		QString enc_name = target_->encoder_id
+					   ? QString::fromUtf8(
+						     target_->encoder_id)
+					   : "obs_x264";
+		int br = target_->custom_bitrate > 0
+				 ? target_->custom_bitrate
+				 : 4000;
+		summary += QString("Encoder: %1 @ %2 kbps\n")
+				   .arg(enc_name)
+				   .arg(br);
+	} else {
+		summary += "Encoder: Shared (zero overhead)\n";
 	}
 
-	/* Update dock title */
-	QString title = QString("%1: %2")
-				.arg(obs_module_text("Recast.Dock.Settings"))
-				.arg(new_name);
-	setWindowTitle(title);
+	/* Resolution */
+	if (target_->width > 0 && target_->height > 0) {
+		summary += QString("Resolution: %1x%2\n")
+				   .arg(target_->width)
+				   .arg(target_->height);
+	} else {
+		summary += "Resolution: Main canvas\n";
+	}
 
-	emit settingsChanged(target_);
+	/* Audio track */
+	summary += QString("Audio: Track %1\n")
+			   .arg(target_->audio_track + 1);
 
-	Q_UNUSED(resolution_changed);
+	/* Auto */
+	if (target_->auto_start)
+		summary += "Auto-start: Yes\n";
+	if (target_->auto_stop)
+		summary += "Auto-stop: Yes\n";
+
+	/* Recording */
+	if (target_->rec_enabled)
+		summary += "Recording: Enabled\n";
+
+	summary_label_->setText(summary.trimmed());
+}
+
+void RecastSettingsDock::onOpenSettings()
+{
+	auto *dlg = new RecastConfigDialog(target_, this);
+	connect(dlg, &RecastConfigDialog::settingsApplied, this,
+		[this](recast_output_target_t *t) {
+			updateSummary();
+
+			/* Update dock title */
+			QString title =
+				QString("%1: %2")
+					.arg(obs_module_text(
+						"Recast.Dock.Settings"))
+					.arg(QString::fromUtf8(t->name));
+			setWindowTitle(title);
+
+			emit settingsChanged(t);
+		});
+	dlg->exec();
+	dlg->deleteLater();
 }

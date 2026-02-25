@@ -209,6 +209,11 @@ obs_data_t *recast_config_save_scene_model(
 
 		obs_data_set_string(scene_data, "name", e->name);
 
+		/* Scene link */
+		if (e->linked_main_scene)
+			obs_data_set_string(scene_data, "linked_main_scene",
+					    e->linked_main_scene);
+
 		/* Scene items */
 		obs_data_array_t *items_arr = obs_data_array_create();
 
@@ -259,6 +264,14 @@ recast_scene_model_t *recast_config_load_scene_model(obs_data_t *data)
 		}
 
 		obs_scene_t *scene = model->scenes[scene_idx].scene;
+
+		/* Load scene link */
+		const char *linked =
+			obs_data_get_string(scene_data, "linked_main_scene");
+		if (linked && *linked) {
+			recast_scene_model_link_scene(model, scene_idx,
+						      linked);
+		}
 
 		/* Load scene items */
 		obs_data_array_t *items_arr =

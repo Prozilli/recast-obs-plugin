@@ -1,15 +1,14 @@
 /*
- * plugin-main.c — Recast OBS Plugin entry point.
+ * plugin-main.c -- Recast OBS Plugin entry point.
  *
- * Registers the custom RTMP service, output management layer,
- * and Qt dock widget for multi-output streaming.
+ * Registers the output management layer and Qt dock widget for
+ * multi-output streaming with protocol-aware service selection.
  */
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
 #include "recast-output.h"
-#include "recast-service.h"
 
 /* C-only forward declarations for the dock (C++ implementation) */
 void recast_dock_create(void);
@@ -20,8 +19,8 @@ OBS_MODULE_USE_DEFAULT_LOCALE("recast-obs-plugin", "en-US")
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "Recast Output — Multi-destination RTMP streaming with "
-	       "per-scene support";
+	return "Recast Output — Multi-destination streaming with "
+	       "per-scene support and protocol detection";
 }
 
 /* Frontend event callback: create the dock once OBS is fully loaded */
@@ -36,13 +35,10 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 
 bool obs_module_load(void)
 {
-	blog(LOG_INFO, "[Recast] Loading plugin v%s", "1.0.0");
-
-	/* Register custom RTMP service type */
-	recast_service_register();
+	blog(LOG_INFO, "[Recast] Loading plugin v%s", "2.0.0");
 
 	/* Register output helpers (currently a no-op; uses built-in
-	 * rtmp_output via the management layer) */
+	 * rtmp_output/whip_output via the management layer) */
 	recast_output_register();
 
 	/* Defer dock creation until OBS UI is ready */

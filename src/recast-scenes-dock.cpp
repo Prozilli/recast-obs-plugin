@@ -7,14 +7,17 @@
 
 #include "recast-scenes-dock.h"
 
+#include <QAction>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QMenu>
 #include <QMessageBox>
 #include <QToolBar>
 #include <QVBoxLayout>
 
 extern "C" {
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 }
 
 RecastScenesDock::RecastScenesDock(recast_output_target_t *target,
@@ -38,8 +41,11 @@ RecastScenesDock::RecastScenesDock(recast_output_target_t *target,
 
 	/* Scene list */
 	list_ = new QListWidget;
+	list_->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(list_, &QListWidget::currentRowChanged,
 		this, &RecastScenesDock::onSceneSelected);
+	connect(list_, &QListWidget::customContextMenuRequested,
+		this, &RecastScenesDock::onContextMenu);
 	layout->addWidget(list_);
 
 	/* Toolbar */
@@ -198,4 +204,80 @@ void RecastScenesDock::onSceneSelected(int row)
 		recast_scene_model_get_active_source(target_->scene_model);
 
 	emit activeSceneChanged(scene, src);
+}
+
+void RecastScenesDock::onContextMenu(const QPoint &pos)
+{
+	QMenu menu;
+
+	int row = list_->currentRow();
+
+	/* Add Scene — always available */
+	QAction *add_action =
+		menu.addAction(obs_module_text("Recast.Scenes.Add"));
+	connect(add_action, &QAction::triggered, this,
+		&RecastScenesDock::onAddScene);
+
+	if (row >= 0) {
+		menu.addSeparator();
+
+		/* Rename */
+		QAction *rename_action =
+			menu.addAction(obs_module_text("Recast.Scenes.Rename"));
+		connect(rename_action, &QAction::triggered, this,
+			&RecastScenesDock::onRenameScene);
+
+		/* Link to Main Scene */
+		QMenu *link_menu = menu.addMenu("Link to Main Scene");
+
+		/* Unlink option */
+		recast_scene_entry_t *entry =
+			&target_->scene_model->scenes[row];
+		if (entry->linked_main_scene) {
+			QAction *unlink = link_menu->addAction(
+				QString("Unlink (currently: %1)")
+					.arg(QString::fromUtf8(
+						entry->linked_main_scene)));
+			connect(unlink, &QAction::triggered, this,
+				[this, row]() {
+					recast_scene_model_link_scene(
+						target_->scene_model,
+						row, NULL);
+					emit scenesModified();
+				});
+			link_menu->addSeparator();
+		}
+
+		/* List all main scenes */
+		char **main_scenes = obs_frontend_get_scene_names();
+		if (main_scenes) {
+			for (char **s = main_scenes; *s; s++) {
+				QString scene_name =
+					QString::fromUtf8(*s);
+				QAction *link_action =
+					link_menu->addAction(scene_name);
+				connect(link_action,
+					&QAction::triggered, this,
+					[this, row, scene_name]() {
+						recast_scene_model_link_scene(
+							target_->scene_model,
+							row,
+							scene_name.toUtf8()
+								.constData());
+						emit scenesModified();
+					});
+			}
+			bfree(main_scenes);
+		}
+
+		menu.addSeparator();
+
+		/* Remove */
+		QAction *remove_action = menu.addAction(
+			obs_module_text("Recast.Scenes.Remove"));
+		connect(remove_action, &QAction::triggered, this,
+			&RecastScenesDock::onRemoveScene);
+	}
+
+	menu.exec(list_->mapToGlobal(pos));
 }

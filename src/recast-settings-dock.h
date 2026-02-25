@@ -1,9 +1,8 @@
 #pragma once
 
 #include <QDockWidget>
-#include <QLineEdit>
+#include <QLabel>
 #include <QPushButton>
-#include <QSpinBox>
 
 extern "C" {
 #include <obs.h>
@@ -21,19 +20,15 @@ public:
 	void populateFromTarget();
 
 signals:
-	/* Emitted when the user clicks Apply */
+	/* Emitted when the user applies settings */
 	void settingsChanged(recast_output_target_t *target);
 
 private slots:
-	void onApply();
+	void onOpenSettings();
 
 private:
 	recast_output_target_t *target_;
+	QLabel *summary_label_;
 
-	QLineEdit *name_edit_;
-	QLineEdit *url_edit_;
-	QLineEdit *key_edit_;
-	QSpinBox *width_spin_;
-	QSpinBox *height_spin_;
-	QSpinBox *bitrate_spin_;
+	void updateSummary();
 };

@@ -37,9 +37,12 @@ set_target_properties(OBS::obs-frontend-api PROPERTIES
 add_library(recast-obs-plugin MODULE
 	src/plugin-main.c
 	src/recast-output.c
-	src/recast-service.c
+	src/recast-protocol.c
 	src/recast-config.c
 	src/recast-scene-model.c
+	src/recast-platform-icons.cpp
+	src/recast-source-tree.cpp
+	src/recast-config-dialog.cpp
 	src/recast-dock.cpp
 	src/recast-dock-manager.cpp
 	src/recast-scenes-dock.cpp

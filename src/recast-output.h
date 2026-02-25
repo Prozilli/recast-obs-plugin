@@ -2,6 +2,7 @@
 
 #include <obs-module.h>
 #include "recast-scene-model.h"
+#include "recast-protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,22 +23,46 @@ typedef struct recast_output_target {
 	char *scene_name; /* NULL = use main scene (legacy) */
 	bool enabled;
 	bool auto_start;
+	bool auto_stop;   /* stop when main stream stops */
 	int width;  /* 0 = use main canvas */
 	int height; /* 0 = use main canvas */
+
+	/* Protocol detection */
+	recast_protocol_t protocol;
+
+	/* Encoding mode */
+	bool advanced_encoder;        /* false=shared, true=custom */
+	char *encoder_id;             /* e.g. "obs_x264", NULL=default */
+	obs_data_t *encoder_settings; /* custom encoder settings */
+	int audio_track;              /* 0-5 for tracks 1-6 */
+	int custom_bitrate;           /* 0 = use shared/default */
 
 	/* Independent scene model (NULL when use_private_scenes=false) */
 	recast_scene_model_t *scene_model;
 	bool use_private_scenes;
 
 	/* OBS objects */
-	obs_output_t *output;   /* built-in "rtmp_output" instance */
-	obs_service_t *service; /* "recast_rtmp_service" instance */
+	obs_output_t *output;   /* streaming output instance */
+	obs_service_t *service; /* rtmp_custom / whip_custom instance */
 
-	/* Per-scene rendering (Phase 3) — NULL when sharing main */
+	/* Per-scene rendering — NULL when sharing main */
 	obs_view_t *view;
 	video_t *video;
 	obs_encoder_t *video_encoder;
 	obs_encoder_t *audio_encoder;
+
+	/* Recording */
+	obs_output_t *rec_output;
+	obs_encoder_t *rec_video_encoder;
+	bool rec_active;
+	bool rec_enabled;
+	char *rec_path;
+	char *rec_format;  /* mp4, mkv, flv */
+	int rec_bitrate;
+
+	/* Virtual camera */
+	obs_output_t *virtualcam_output;
+	bool virtualcam_active;
 
 	/* Runtime state */
 	bool active;
@@ -69,6 +94,14 @@ void recast_output_target_bind_active_scene(recast_output_target_t *target);
  * Pass scene_src = the source to render in the view. */
 bool recast_output_target_ensure_view(recast_output_target_t *target,
 				      obs_source_t *scene_src);
+
+/* Recording */
+bool recast_output_target_start_recording(recast_output_target_t *target);
+void recast_output_target_stop_recording(recast_output_target_t *target);
+
+/* Virtual camera */
+bool recast_output_target_start_virtualcam(recast_output_target_t *target);
+void recast_output_target_stop_virtualcam(recast_output_target_t *target);
 
 /* ---- OBS registration (called from plugin-main.c) ---- */
 
