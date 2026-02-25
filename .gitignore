@@ -1,0 +1,28 @@
+# Build directories
+build_*/
+build/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+.idea/
+*.swp
+*~
+
+# Compiled
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.exe
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Installer output
+installer/*.exe
