@@ -622,6 +622,15 @@ void RecastMultistreamDock::onAddDestination()
 		return;
 	}
 
+	/* Validate URL format */
+	if (!url.startsWith("rtmp://") && !url.startsWith("rtmps://")
+	    && !url.startsWith("srt://")) {
+		QMessageBox::warning(
+			this, obs_module_text("Recast.Error"),
+			"URL must start with rtmp://, rtmps://, or srt://");
+		return;
+	}
+
 	recast_destination_t *dest = recast_destination_create(
 		name.toUtf8().constData(),
 		url.toUtf8().constData(),
@@ -829,14 +838,13 @@ void RecastMultistreamDock::onSyncServer()
 		bfree(config_path);
 	}
 
-	/* Build full URL with token parameter */
-	QString url = server_url;
-	if (!token_str.isEmpty()) {
-		url += (url.contains('?') ? "&" : "?");
-		url += "token=" + token_str;
-	}
-
-	QNetworkReply *reply = net_mgr_->get(QNetworkRequest(QUrl(url)));
+	/* Build request with token in Authorization header */
+	QNetworkRequest req{QUrl(server_url)};
+	req.setTransferTimeout(15000); /* 15 second timeout */
+	if (!token_str.isEmpty())
+		req.setRawHeader("Authorization",
+				 ("Bearer " + token_str).toUtf8());
+	QNetworkReply *reply = net_mgr_->get(req);
 	connect(reply, &QNetworkReply::finished, this, [this, reply]() {
 		reply->deleteLater();
 
@@ -847,6 +855,15 @@ void RecastMultistreamDock::onSyncServer()
 					.arg(obs_module_text(
 						"Recast.Error.Sync"))
 					.arg(reply->errorString()));
+			return;
+		}
+
+		int http_status = reply->attribute(
+			QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		if (http_status < 200 || http_status >= 300) {
+			QMessageBox::warning(
+				this, obs_module_text("Recast.Error"),
+				QString("Server returned HTTP %1").arg(http_status));
 			return;
 		}
 

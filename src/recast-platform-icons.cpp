@@ -25,7 +25,7 @@ static const PlatformDef platforms[] = {
 	{"youtu.be",      "youtube",  'Y', QColor(255, 0, 0)},
 	{"tiktok",        "tiktok",   'K', QColor(0, 0, 0)},
 	{"kick.com",      "kick",     'K', QColor(83, 252, 24)},
-	{"a]]kick",       "kick",     'K', QColor(83, 252, 24)},
+	{"kick",          "kick",     'K', QColor(83, 252, 24)},
 	{"facebook.com",  "facebook", 'F', QColor(24, 119, 242)},
 	{"fb.gg",         "facebook", 'F', QColor(24, 119, 242)},
 	{"pscp.tv",       "x",        'X', QColor(0, 0, 0)},

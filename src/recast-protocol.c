@@ -37,8 +37,6 @@ recast_protocol_t recast_protocol_detect(const char *url)
 		return RECAST_PROTO_SRT;
 	if (starts_with_ci(url, "rist://"))
 		return RECAST_PROTO_RIST;
-	if (starts_with_ci(url, "ftl://"))
-		return RECAST_PROTO_FTL;
 	if (starts_with_ci(url, "https://") || starts_with_ci(url, "http://"))
 		return RECAST_PROTO_WHIP;
 
@@ -56,8 +54,6 @@ const char *recast_protocol_output_id(recast_protocol_t proto)
 		return "ffmpeg_mpegts_muxer";
 	case RECAST_PROTO_WHIP:
 		return "whip_output";
-	case RECAST_PROTO_FTL:
-		return "ftl_output";
 	case RECAST_PROTO_UNKNOWN:
 	default:
 		return "rtmp_output";
@@ -73,7 +69,6 @@ const char *recast_protocol_service_id(recast_protocol_t proto)
 	case RECAST_PROTO_RTMPS:
 	case RECAST_PROTO_SRT:
 	case RECAST_PROTO_RIST:
-	case RECAST_PROTO_FTL:
 	case RECAST_PROTO_UNKNOWN:
 	default:
 		return "rtmp_custom";
@@ -88,7 +83,6 @@ const char *recast_protocol_name(recast_protocol_t proto)
 	case RECAST_PROTO_SRT:   return "SRT";
 	case RECAST_PROTO_RIST:  return "RIST";
 	case RECAST_PROTO_WHIP:  return "WHIP";
-	case RECAST_PROTO_FTL:   return "FTL";
 	case RECAST_PROTO_UNKNOWN:
 	default:
 		return "Unknown";

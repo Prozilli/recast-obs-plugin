@@ -17,7 +17,7 @@ if(NOT OBS_LIB_DIR)
 endif()
 
 # --- Find Qt6 ---
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network WebSockets)
 qt6_standard_project_setup()
 
 # --- Create imported targets for OBS ---
@@ -60,6 +60,11 @@ add_library(recast-obs-plugin MODULE
 	# New: multistream dock
 	src/recast-multistream.cpp
 
+	# New: platform auth, chat, and events
+	src/recast-auth.cpp
+	src/recast-chat.cpp
+	src/recast-events.cpp
+
 	# New: top-level UI setup
 	src/recast-ui.cpp
 )
@@ -71,6 +76,7 @@ target_link_libraries(recast-obs-plugin PRIVATE
 	OBS::obs-frontend-api
 	Qt6::Widgets
 	Qt6::Network
+	Qt6::WebSockets
 )
 
 # Qt MOC for C++ headers with Q_OBJECT

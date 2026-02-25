@@ -12,6 +12,9 @@
 #include "recast-vertical-sources.h"
 #include "recast-multistream.h"
 #include "recast-preview-widget.h"
+#include "recast-auth.h"
+#include "recast-chat.h"
+#include "recast-events.h"
 
 #include <QDockWidget>
 #include <QMainWindow>
@@ -30,6 +33,16 @@ static RecastVerticalPreviewDock *preview_dock = nullptr;
 static RecastVerticalScenesDock *scenes_dock = nullptr;
 static RecastVerticalSourcesDock *sources_dock = nullptr;
 static RecastMultistreamDock *multistream_dock = nullptr;
+static RecastChatDock *chat_dock = nullptr;
+static RecastEventsDock *events_dock = nullptr;
+
+/* Chat and event providers */
+static RecastTwitchChat *twitch_chat = nullptr;
+static RecastYouTubeChat *youtube_chat = nullptr;
+static RecastKickChat *kick_chat = nullptr;
+static RecastTwitchEvents *twitch_events = nullptr;
+static RecastYouTubeEvents *youtube_events = nullptr;
+static RecastKickEvents *kick_events = nullptr;
 
 /* ---- Dock helpers ---- */
 
@@ -55,6 +68,8 @@ static dock_entry dock_map[] = {
 	{"dock_scenes", (QWidget **)&scenes_dock},
 	{"dock_sources", (QWidget **)&sources_dock},
 	{"dock_multistream", (QWidget **)&multistream_dock},
+	{"dock_chat", (QWidget **)&chat_dock},
+	{"dock_events", (QWidget **)&events_dock},
 };
 
 /* ---- Config persistence ---- */
@@ -86,6 +101,16 @@ static void save_all_config()
 	char *token = recast_config_get_server_token();
 	obs_data_set_string(root, "server_token", token ? token : "");
 	bfree(token);
+
+	/* Save auth tokens */
+	RecastAuthManager *auth = RecastAuthManager::instance();
+	if (auth) {
+		obs_data_t *auth_data = auth->saveToConfig();
+		if (auth_data) {
+			obs_data_set_obj(root, "auth", auth_data);
+			obs_data_release(auth_data);
+		}
+	}
 
 	/* Save main window state (captures all dock positions/sizes).
 	 * Guard against accessing already-destroyed widgets on shutdown. */
@@ -251,6 +276,15 @@ static void load_all_config()
 		obs_data_array_release(dests);
 	}
 
+	/* Load auth tokens */
+	obs_data_t *auth_data = obs_data_get_obj(root, "auth");
+	if (auth_data) {
+		RecastAuthManager *auth = RecastAuthManager::instance();
+		if (auth)
+			auth->loadFromConfig(auth_data);
+		obs_data_release(auth_data);
+	}
+
 	obs_data_release(root);
 }
 
@@ -316,11 +350,32 @@ void recast_ui_create(void)
 	/* Initialize the vertical canvas singleton */
 	RecastVertical *v = RecastVertical::instance();
 
-	/* Create all 4 docks */
+	/* Initialize auth manager */
+	RecastAuthManager::instance();
+
+	/* Create all 6 docks */
 	preview_dock = new RecastVerticalPreviewDock(main_window);
 	scenes_dock = new RecastVerticalScenesDock(main_window);
 	sources_dock = new RecastVerticalSourcesDock(main_window);
 	multistream_dock = new RecastMultistreamDock(main_window);
+	chat_dock = new RecastChatDock(main_window);
+	events_dock = new RecastEventsDock(main_window);
+
+	/* Create chat providers */
+	twitch_chat = new RecastTwitchChat(chat_dock);
+	youtube_chat = new RecastYouTubeChat(chat_dock);
+	kick_chat = new RecastKickChat(chat_dock);
+	chat_dock->addProvider(twitch_chat);
+	chat_dock->addProvider(youtube_chat);
+	chat_dock->addProvider(kick_chat);
+
+	/* Create event providers */
+	twitch_events = new RecastTwitchEvents(events_dock);
+	youtube_events = new RecastYouTubeEvents(events_dock);
+	kick_events = new RecastKickEvents(events_dock);
+	events_dock->addProvider(twitch_events);
+	events_dock->addProvider(youtube_events);
+	events_dock->addProvider(kick_events);
 
 	/* Load config (populates scenes + destinations) */
 	load_all_config();
@@ -330,8 +385,11 @@ void recast_ui_create(void)
 
 	/* Refresh docks with loaded data */
 	scenes_dock->refresh();
-	sources_dock->setCurrentScene(v->activeSceneIndex());
-	preview_dock->onActiveSceneChanged(v->activeSceneIndex());
+	int scene_idx = v->activeSceneIndex();
+	if (scene_idx >= 0) {
+		sources_dock->setCurrentScene(scene_idx);
+		preview_dock->onActiveSceneChanged(scene_idx);
+	}
 
 	/* ---- Wire signals ---- */
 
@@ -414,6 +472,16 @@ void recast_ui_create(void)
 		obs_module_text("Recast.Multistream.DockTitle"),
 		multistream_dock);
 
+	obs_frontend_add_dock_by_id(
+		"RecastChatDock",
+		obs_module_text("Recast.Chat.DockTitle"),
+		chat_dock);
+
+	obs_frontend_add_dock_by_id(
+		"RecastEventsDock",
+		obs_module_text("Recast.Events.DockTitle"),
+		events_dock);
+
 	/* Restore dock positions and force visible.
 	 * OBS does not persist plugin dock state, so we manage it ourselves.
 	 * Deferred so OBS has finished parenting the dock widgets. */
@@ -455,7 +523,60 @@ void recast_ui_create(void)
 			obs_data_release(cfg);
 	});
 
-	blog(LOG_INFO, "[Recast] All 4 docks created and wired");
+	/* Wire auth state changes to auto-connect chat/events */
+	RecastAuthManager *auth = RecastAuthManager::instance();
+	QObject::connect(auth, &RecastAuthManager::authStateChanged,
+		[](const QString &platform, bool authenticated) {
+			if (authenticated) {
+				RecastAuthManager *a =
+					RecastAuthManager::instance();
+				if (platform == "twitch") {
+					QString user = a->userName("twitch");
+					if (twitch_chat && !user.isEmpty())
+						twitch_chat->connectToChat(user);
+					if (twitch_events)
+						twitch_events->connectToEvents();
+				} else if (platform == "youtube") {
+					if (youtube_chat)
+						youtube_chat->connectToChat(
+							QString());
+					if (youtube_events)
+						youtube_events->connectToEvents();
+				}
+			} else {
+				if (platform == "twitch") {
+					if (twitch_chat)
+						twitch_chat->disconnect();
+					if (twitch_events)
+						twitch_events->disconnect();
+				} else if (platform == "youtube") {
+					if (youtube_chat)
+						youtube_chat->disconnect();
+					if (youtube_events)
+						youtube_events->disconnect();
+				}
+			}
+		});
+
+	/* Auto-connect to authenticated platforms on startup */
+	QTimer::singleShot(2000, [=]() {
+		RecastAuthManager *a = RecastAuthManager::instance();
+		if (a->isAuthenticated("twitch")) {
+			QString user = a->userName("twitch");
+			if (twitch_chat && !user.isEmpty())
+				twitch_chat->connectToChat(user);
+			if (twitch_events)
+				twitch_events->connectToEvents();
+		}
+		if (a->isAuthenticated("youtube")) {
+			if (youtube_chat)
+				youtube_chat->connectToChat(QString());
+			if (youtube_events)
+				youtube_events->connectToEvents();
+		}
+	});
+
+	blog(LOG_INFO, "[Recast] All 6 docks created and wired");
 }
 
 void recast_ui_destroy(void)
@@ -464,14 +585,35 @@ void recast_ui_destroy(void)
 	 * Do NOT call save_all_config() here — dock widgets may
 	 * already be destroyed by OBS at this point. */
 
+	/* Disconnect chat/event providers */
+	if (twitch_chat) twitch_chat->disconnect();
+	if (youtube_chat) youtube_chat->disconnect();
+	if (kick_chat) kick_chat->disconnect();
+	if (twitch_events) twitch_events->disconnect();
+	if (youtube_events) youtube_events->disconnect();
+	if (kick_events) kick_events->disconnect();
+
 	/* OBS manages dock widget lifecycle, clear our references */
 	preview_dock = nullptr;
 	scenes_dock = nullptr;
 	sources_dock = nullptr;
 	multistream_dock = nullptr;
+	chat_dock = nullptr;
+	events_dock = nullptr;
+
+	/* Clear provider references (owned by docks, deleted by Qt) */
+	twitch_chat = nullptr;
+	youtube_chat = nullptr;
+	kick_chat = nullptr;
+	twitch_events = nullptr;
+	youtube_events = nullptr;
+	kick_events = nullptr;
 
 	/* Destroy the vertical canvas singleton */
 	RecastVertical::destroyInstance();
+
+	/* Destroy auth manager singleton */
+	RecastAuthManager::destroyInstance();
 
 	blog(LOG_INFO, "[Recast] UI destroyed");
 }
