@@ -142,6 +142,11 @@ void RecastVerticalSourcesDock::selectSceneItem(obs_sceneitem_t *item)
 	tree_->selectItem(item);
 }
 
+void RecastVerticalSourcesDock::refreshTree()
+{
+	tree_->refreshItems();
+}
+
 /* ---- Build full add-source menu ---- */
 
 struct source_type_entry {
@@ -499,6 +504,20 @@ void RecastVerticalSourcesDock::buildTransformMenu(QMenu *menu,
 			emit sourcesModified();
 		});
 
+	QAction *center_h_act = menu->addAction("Center Horizontally");
+	connect(center_h_act, &QAction::triggered, this,
+		[this, item, cw]() {
+			RecastPreviewWidget::CenterHorizontal(item, cw);
+			emit sourcesModified();
+		});
+
+	QAction *center_v_act = menu->addAction("Center Vertically");
+	connect(center_v_act, &QAction::triggered, this,
+		[this, item, ch]() {
+			RecastPreviewWidget::CenterVertical(item, ch);
+			emit sourcesModified();
+		});
+
 	menu->addSeparator();
 
 	QAction *flip_h_act = menu->addAction("Flip Horizontal");
@@ -512,6 +531,31 @@ void RecastVerticalSourcesDock::buildTransformMenu(QMenu *menu,
 	connect(flip_v_act, &QAction::triggered, this,
 		[this, item, ch]() {
 			RecastPreviewWidget::FlipVertical(item, ch);
+			emit sourcesModified();
+		});
+
+	menu->addSeparator();
+
+	QAction *rot_cw_act = menu->addAction("Rotate 90 CW");
+	connect(rot_cw_act, &QAction::triggered, this,
+		[this, item]() {
+			RecastPreviewWidget::Rotate90CW(item);
+			emit sourcesModified();
+		});
+
+	QAction *rot_ccw_act = menu->addAction("Rotate 90 CCW");
+	connect(rot_ccw_act, &QAction::triggered, this,
+		[this, item]() {
+			RecastPreviewWidget::Rotate90CCW(item);
+			emit sourcesModified();
+		});
+
+	menu->addSeparator();
+
+	QAction *reset_act = menu->addAction("Reset Transform");
+	connect(reset_act, &QAction::triggered, this,
+		[this, item]() {
+			RecastPreviewWidget::ResetTransform(item);
 			emit sourcesModified();
 		});
 

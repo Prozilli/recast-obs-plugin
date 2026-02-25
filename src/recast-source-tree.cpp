@@ -580,6 +580,26 @@ void SourceTree::selectItem(obs_sceneitem_t *item)
 	}
 }
 
+void SourceTree::mousePressEvent(QMouseEvent *event)
+{
+	QModelIndex index = indexAt(event->pos());
+	if (!index.isValid()) {
+		/* Clicked empty space — deselect everything */
+		selectionModel()->clear();
+		setCurrentIndex(QModelIndex());
+		emit itemSelected(nullptr);
+
+		for (int i = 0; i < model_->rowCount(); i++) {
+			auto *widget = static_cast<SourceTreeItem *>(
+				indexWidget(model_->index(i)));
+			if (widget)
+				widget->setSelected(false);
+		}
+		return;
+	}
+	QListView::mousePressEvent(event);
+}
+
 void SourceTree::keyPressEvent(QKeyEvent *event)
 {
 	if (event->key() == Qt::Key_F2) {

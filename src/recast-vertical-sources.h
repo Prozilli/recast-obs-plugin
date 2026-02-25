@@ -28,6 +28,7 @@ public:
 public slots:
 	void setCurrentScene(int idx);
 	void selectSceneItem(obs_sceneitem_t *item);
+	void refreshTree();
 
 signals:
 	void sourcesModified();

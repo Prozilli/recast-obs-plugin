@@ -37,8 +37,13 @@ public:
 	static void FitToCanvas(obs_sceneitem_t *item, int cw, int ch);
 	static void StretchToCanvas(obs_sceneitem_t *item, int cw, int ch);
 	static void CenterOnCanvas(obs_sceneitem_t *item, int cw, int ch);
+	static void CenterHorizontal(obs_sceneitem_t *item, int cw);
+	static void CenterVertical(obs_sceneitem_t *item, int ch);
 	static void FlipHorizontal(obs_sceneitem_t *item, int cw);
 	static void FlipVertical(obs_sceneitem_t *item, int ch);
+	static void Rotate90CW(obs_sceneitem_t *item);
+	static void Rotate90CCW(obs_sceneitem_t *item);
+	static void ResetTransform(obs_sceneitem_t *item);
 
 public slots:
 	void SetSelectedItem(obs_sceneitem_t *item);

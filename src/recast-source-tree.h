@@ -115,6 +115,7 @@ signals:
 	void sourcesModified();
 
 protected:
+	void mousePressEvent(QMouseEvent *event) override;
 	void keyPressEvent(QKeyEvent *event) override;
 
 private slots:

@@ -88,6 +88,16 @@ static obs_data_t *save_scene_item(obs_sceneitem_t *item)
 		obs_data_set_string(d, "source_name",
 				    obs_source_get_name(src));
 
+		/* Always save type + settings so we can recreate if needed */
+		obs_data_set_string(d, "source_type",
+				    obs_source_get_id(src));
+		obs_data_t *settings = obs_source_get_settings(src);
+		if (settings) {
+			obs_data_set_obj(d, "source_settings", settings);
+			obs_data_release(settings);
+		}
+
+		/* Flag whether source exists in main OBS scenes */
 		obs_source_t *lookup =
 			obs_get_source_by_name(obs_source_get_name(src));
 		if (lookup) {
@@ -95,14 +105,6 @@ static obs_data_t *save_scene_item(obs_sceneitem_t *item)
 			obs_source_release(lookup);
 		} else {
 			obs_data_set_bool(d, "is_existing", false);
-			obs_data_set_string(d, "source_type",
-					    obs_source_get_id(src));
-			obs_data_t *settings = obs_source_get_settings(src);
-			if (settings) {
-				obs_data_set_obj(d, "source_settings",
-						 settings);
-				obs_data_release(settings);
-			}
 		}
 	}
 
@@ -188,6 +190,10 @@ obs_data_t *recast_config_save_scene_model(
 					     &ctx);
 		}
 
+		blog(LOG_INFO,
+		     "[Recast] Saving scene '%s': %zu items",
+		     e->name, obs_data_array_count(items_arr));
+
 		obs_data_set_array(scene_data, "items", items_arr);
 		obs_data_array_release(items_arr);
 
@@ -242,6 +248,9 @@ recast_scene_model_t *recast_config_load_scene_model(obs_data_t *data)
 			obs_data_get_array(scene_data, "items");
 		if (items_arr) {
 			size_t item_count = obs_data_array_count(items_arr);
+			blog(LOG_INFO,
+			     "[Recast] Loading %zu items for scene '%s'",
+			     item_count, scene_name);
 			for (size_t j = 0; j < item_count; j++) {
 				obs_data_t *item_data =
 					obs_data_array_item(items_arr, j);
@@ -253,9 +262,12 @@ recast_scene_model_t *recast_config_load_scene_model(obs_data_t *data)
 
 				obs_source_t *src = NULL;
 
-				if (is_existing) {
+				/* Try to find existing source first */
+				if (is_existing)
 					src = obs_get_source_by_name(src_name);
-				} else {
+
+				/* Fallback: create from saved type/settings */
+				if (!src) {
 					const char *src_type =
 						obs_data_get_string(
 							item_data,
@@ -264,6 +276,13 @@ recast_scene_model_t *recast_config_load_scene_model(obs_data_t *data)
 						obs_data_get_obj(
 							item_data,
 							"source_settings");
+
+					blog(LOG_INFO,
+					     "[Recast] Creating source '%s' "
+					     "type='%s' (was_existing=%d)",
+					     src_name,
+					     src_type ? src_type : "(null)",
+					     is_existing);
 
 					if (src_type && *src_type) {
 						src = obs_source_create(

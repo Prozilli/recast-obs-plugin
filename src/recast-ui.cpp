@@ -13,7 +13,10 @@
 #include "recast-multistream.h"
 #include "recast-preview-widget.h"
 
+#include <QDockWidget>
+#include <QMainWindow>
 #include <QObject>
+#include <QTimer>
 
 extern "C" {
 #include <obs-frontend-api.h>
@@ -27,6 +30,32 @@ static RecastVerticalPreviewDock *preview_dock = nullptr;
 static RecastVerticalScenesDock *scenes_dock = nullptr;
 static RecastVerticalSourcesDock *sources_dock = nullptr;
 static RecastMultistreamDock *multistream_dock = nullptr;
+
+/* ---- Dock helpers ---- */
+
+static QDockWidget *findParentDock(QWidget *w)
+{
+	QWidget *p = w ? w->parentWidget() : nullptr;
+	while (p) {
+		QDockWidget *dw = qobject_cast<QDockWidget *>(p);
+		if (dw)
+			return dw;
+		p = p->parentWidget();
+	}
+	return nullptr;
+}
+
+struct dock_entry {
+	const char *key;
+	QWidget **widget;
+};
+
+static dock_entry dock_map[] = {
+	{"dock_preview", (QWidget **)&preview_dock},
+	{"dock_scenes", (QWidget **)&scenes_dock},
+	{"dock_sources", (QWidget **)&sources_dock},
+	{"dock_multistream", (QWidget **)&multistream_dock},
+};
 
 /* ---- Config persistence ---- */
 
@@ -57,6 +86,21 @@ static void save_all_config()
 	char *token = recast_config_get_server_token();
 	obs_data_set_string(root, "server_token", token ? token : "");
 	bfree(token);
+
+	/* Save main window state (captures all dock positions/sizes).
+	 * Guard against accessing already-destroyed widgets on shutdown. */
+	try {
+		QMainWindow *mw = qobject_cast<QMainWindow *>(
+			static_cast<QWidget *>(
+				obs_frontend_get_main_window()));
+		if (mw) {
+			QByteArray state = mw->saveState();
+			obs_data_set_string(root, "mainwindow_state",
+					    state.toBase64().constData());
+		}
+	} catch (...) {
+		/* Widgets may be partially destroyed during shutdown */
+	}
 
 	/* Write to disk */
 	char *path = recast_config_get_path();
@@ -210,6 +254,55 @@ static void load_all_config()
 	obs_data_release(root);
 }
 
+/* ---- Dock-geometry-only save (safe during shutdown) ---- */
+
+static void save_dock_geometry_only()
+{
+	/* Read existing config so we preserve scene/destination data */
+	char *path = recast_config_get_path();
+	if (!path)
+		return;
+
+	obs_data_t *root = obs_data_create_from_json_file(path);
+	if (!root) {
+		/* No existing config — nothing to preserve */
+		bfree(path);
+		return;
+	}
+
+	/* Update main window state (captures all dock positions/sizes) */
+	try {
+		QMainWindow *mw = qobject_cast<QMainWindow *>(
+			static_cast<QWidget *>(
+				obs_frontend_get_main_window()));
+		if (mw) {
+			QByteArray state = mw->saveState();
+			obs_data_set_string(root, "mainwindow_state",
+					    state.toBase64().constData());
+		}
+	} catch (...) {
+		/* Widgets may be partially destroyed during shutdown */
+	}
+
+	obs_data_save_json(root, path);
+	blog(LOG_INFO, "[Recast] Dock geometry saved to %s", path);
+	bfree(path);
+	obs_data_release(root);
+}
+
+/* ---- Frontend event: save before exit ---- */
+
+static void on_frontend_event(enum obs_frontend_event event, void *)
+{
+	if (event == OBS_FRONTEND_EVENT_EXIT) {
+		/* Only save dock geometry on exit.
+		 * Scene data is saved during normal operation via signals.
+		 * By EXIT time OBS has already torn down private scene
+		 * contents, so a full save would overwrite items with []. */
+		save_dock_geometry_only();
+	}
+}
+
 /* ---- Public API ---- */
 
 void recast_ui_create(void)
@@ -276,6 +369,11 @@ void recast_ui_create(void)
 			 pw,
 			 &RecastPreviewWidget::SetSelectedItem);
 
+	/* Preview transform -> refresh source tree (lock/vis icons) */
+	QObject::connect(pw, &RecastPreviewWidget::itemTransformed,
+			 sources_dock,
+			 &RecastVerticalSourcesDock::refreshTree);
+
 	/* Config save triggers */
 	QObject::connect(pw, &RecastPreviewWidget::itemTransformed,
 			 [](){ save_all_config(); });
@@ -291,6 +389,9 @@ void recast_ui_create(void)
 	QObject::connect(multistream_dock,
 			 &RecastMultistreamDock::configChanged,
 			 [](){ save_all_config(); });
+
+	/* Save dock state when OBS exits (while widgets are still alive) */
+	obs_frontend_add_event_callback(on_frontend_event, nullptr);
 
 	/* Register docks with OBS frontend */
 	obs_frontend_add_dock_by_id(
@@ -313,14 +414,55 @@ void recast_ui_create(void)
 		obs_module_text("Recast.Multistream.DockTitle"),
 		multistream_dock);
 
+	/* Restore dock positions and force visible.
+	 * OBS does not persist plugin dock state, so we manage it ourselves.
+	 * Deferred so OBS has finished parenting the dock widgets. */
+	QTimer::singleShot(0, [=]() {
+		/* Read saved config */
+		char *cfg_path = recast_config_get_path();
+		obs_data_t *cfg = nullptr;
+		if (cfg_path) {
+			cfg = obs_data_create_from_json_file(cfg_path);
+			bfree(cfg_path);
+		}
+
+		QMainWindow *mw = qobject_cast<QMainWindow *>(
+			static_cast<QWidget *>(
+				obs_frontend_get_main_window()));
+
+		/* Restore main window state (dock positions/sizes) */
+		if (cfg && mw) {
+			const char *state_str = obs_data_get_string(
+				cfg, "mainwindow_state");
+			if (state_str && *state_str) {
+				QByteArray state =
+					QByteArray::fromBase64(
+						QByteArray(state_str));
+				mw->restoreState(state);
+			}
+		}
+
+		/* Ensure all Recast docks are visible */
+		for (auto &d : dock_map) {
+			if (!*d.widget)
+				continue;
+			QDockWidget *dw = findParentDock(*d.widget);
+			if (dw)
+				dw->setVisible(true);
+		}
+
+		if (cfg)
+			obs_data_release(cfg);
+	});
+
 	blog(LOG_INFO, "[Recast] All 4 docks created and wired");
 }
 
 void recast_ui_destroy(void)
 {
-	/* Save config before shutdown */
-	if (multistream_dock)
-		save_all_config();
+	/* Dock state was already saved by the EXIT event callback.
+	 * Do NOT call save_all_config() here — dock widgets may
+	 * already be destroyed by OBS at this point. */
 
 	/* OBS manages dock widget lifecycle, clear our references */
 	preview_dock = nullptr;
