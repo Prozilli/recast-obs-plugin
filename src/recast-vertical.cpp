@@ -11,6 +11,7 @@
 extern "C" {
 #include <obs-module.h>
 #include <util/platform.h>
+#include "recast-config.h"
 }
 
 RecastVertical *RecastVertical::instance_ = nullptr;
@@ -310,8 +311,6 @@ void RecastVertical::loadFromConfig(obs_data_t *vertical_data)
 		obs_data_get_array(vertical_data, "scenes");
 	if (scenes_arr) {
 		/* Reconstruct using the config loader */
-		extern recast_scene_model_t *recast_config_load_scene_model(
-			obs_data_t *data);
 		scene_model_ = recast_config_load_scene_model(vertical_data);
 		obs_data_array_release(scenes_arr);
 	}
@@ -334,8 +333,6 @@ obs_data_t *RecastVertical::saveToConfig() const
 	obs_data_set_int(d, "canvas_height", canvas_height_);
 
 	if (scene_model_) {
-		extern obs_data_t *recast_config_save_scene_model(
-			const recast_scene_model_t *model);
 		obs_data_t *sm = recast_config_save_scene_model(scene_model_);
 		if (sm) {
 			/* Merge scene model fields into vertical data */
